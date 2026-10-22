@@ -144,6 +144,327 @@ oscilloscopes, SMUs, power sources, meters, RF, DAQ, electronic loads and e-fuse
 Four profiles are hand-curated with safety policies and load by default; the full
 corpus is a versioned dataset under `data/` that you can add to the registry.
 
+### Every instrument, by brand and type
+
+Model numbers only — grouped by manufacturer, then instrument type. The four
+hand-curated profiles (`keithley-2400`, `rigol-dho1072`, `keysight-ac6801b`,
+`ea-el9000b`) load by default with safety policies; the rest live in the
+versioned dataset under `data/`.
+
+#### Keysight (279)
+
+**power supply** (226)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| AC6801B | AC6802B | AC6803B | AC6804B | AC6903H | AC6903L |
+| AC6906H | AC6906L | AC6912H | AC6912L | AC6918H | AC6918L |
+| DP5721A | DP5722A | DP5723A | DP5724A | DP5726A | DP5728A |
+| DP5730A | DP5731A | DP5733A | DP5736A | DP5741AH | DP5741AL |
+| DP5741AS | DP5742AH | DP5742AL | DP5742AS | DP5743AH | DP5743AL |
+| DP5743AS | DP5744AH | DP5744AL | DP5744AS | DP5746AH | DP5746AL |
+| DP5746AS | DP5748AH | DP5748AL | DP5748AS | DP5750AH | DP5750AL |
+| DP5750AS | DP5751AH | DP5751AL | DP5751AS | DP5753AH | DP5753AL |
+| DP5753AS | DP5756AH | DP5756AL | DP5756AS | DP5761AH | DP5761AL |
+| DP5762AH | DP5762AL | DP5763AH | DP5763AL | DP5764AH | DP5764AL |
+| DP5765AH | DP5765AL | DP5766AH | DP5766AL | DP5768AH | DP5768AL |
+| DP5770AH | DP5770AL | DP5771AH | DP5771AL | DP5772AH | DP5772AL |
+| DP5773AH | DP5773AL | DP5774AH | DP5774AL | DP5775AH | DP5775AL |
+| DP5776AH | DP5776AL | DP5782AH | DP5782AL | DP5783AH | DP5783AL |
+| DP5784AH | DP5784AL | DP5786AH | DP5786AL | DP5788AH | DP5788AL |
+| DP5790AH | DP5790AL | DP5791AH | DP5791AL | DP5792AH | DP5792AL |
+| DP5793AH | DP5793AL | DP5796AH | DP5796AL | DP5797AH | DP5797AL |
+| DP5799AH | DP5799AL | E36102B | E36103B | E36104B | E36105B |
+| E36106B | E36154A | E36155A | E36231A | E36232A | E36233A |
+| E36234A | E36311A | E36312A | E36313A | E3632A | E3646A |
+| E3647A | E3648A | E3649A | EDU36311A | N5741A | N5742A |
+| N5743A | N5744A | N5745A | N5746A | N5747A | N5748A |
+| N5749A | N5750A | N5751A | N5752A | N5761A | N5762A |
+| N5763A | N5764A | N5765A | N5766A | N5767A | N5768A |
+| N5769A | N5770A | N5771A | N5772A | N6700C | N6701C |
+| N6702C | N6950A | N6951A | N6952A | N6953A | N6954A |
+| N6970A | N6971A | N6972A | N6973A | N6974A | N6976A |
+| N6977A | N7950A | N7951A | N7952A | N7953A | N7954A |
+| N7970A | N7971A | N7972A | N7973A | N7974A | N7976A |
+| N7977A | N8731A | N8732A | N8733A | N8734A | N8735A |
+| N8736A | N8737A | N8738A | N8739A | N8740A | N8741A |
+| N8742A | N8754A | N8755A | N8756A | N8757A | N8758A |
+| N8759A | N8760A | N8761A | N8762A | N8920A | N8921A |
+| N8923A | N8924A | N8925A | N8926A | N8928A | N8929A |
+| N8930A | N8931A | N8932A | N8934A | N8935A | N8937A |
+| N8937APV | N8940A | N8941A | N8943A | N8944A | N8945A |
+| N8946A | N8948A | N8949A | N8950A | N8951A | N8952A |
+| N8954A | N8955A | N8957A | N8957APV |  |  |
+
+**oscilloscope** (38)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DSOX1202A | DSOX1202G | DSOX1204A | DSOX1204G | DSOX2002A | DSOX2004A |
+| DSOX2012A | DSOX2014A | DSOX2022A | DSOX2024A | DSOX4022G | DSOX4024G |
+| DSOX4032G | DSOX4034G | DSOX4052G | DSOX4054G | DSOX4104G | DSOX4154G |
+| DSOX6002A | DSOX6004A | EDUX1052A | EDUX1052G | MSOX2002A | MSOX2004A |
+| MSOX2012A | MSOX2014A | MSOX2022A | MSOX2024A | MSOX4022G | MSOX4024G |
+| MSOX4032G | MSOX4034G | MSOX4052G | MSOX4054G | MSOX4104G | MSOX4154G |
+| MSOX6002A | MSOX6004A |  |  |  |  |
+
+**source measure unit** (5)
+
+|  |  |  |  |  |
+|---|---|---|---|---|
+| M9601A | M9602A | M9603A | M9614A | M9615A |
+
+**photovoltaic array simulator** (4)
+
+|  |  |  |  |
+|---|---|---|---|
+| PV8921A | PV8922A | PV8931A | PV8932A |
+
+**electronic load** (3)
+
+|  |  |  |
+|---|---|---|
+| EL33133A | EL34143A | EL34243A |
+
+**power analyzer** (2)
+
+|  |  |
+|---|---|
+| N6705C | N6715C |
+
+**battery emulator** (1)
+
+|  |
+|---|
+| E36731A |
+
+#### Rigol (211)
+
+**oscilloscope** (97)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DHO1072 | DHO1074 | DHO1102 | DHO1104 | DHO1202 | DHO1204 |
+| DHO4204 | DHO4404 | DHO4804 | DHO5054 | DHO5058 | DHO5104 |
+| DHO5108 | DHO802 | DHO804 | DHO812 | DHO814 | DHO914 |
+| DHO914S | DHO924 | DHO924S | DS1052D | DS1052E | DS1054Z |
+| DS1074B | DS1074Z-PLUS | DS1074Z-S-PLUS | DS1102D | DS1102E | DS1104B |
+| DS1104Z-PLUS | DS1104Z-S-PLUS | DS1202Z-E | DS1204B | DS2072A | DS2072A-S |
+| DS2102A | DS2102A-S | DS2202A | DS2202A-S | DS2302A | DS2302A-S |
+| DS7014 | DS7024 | DS70304 | DS7034 | DS70504 | DS7054 |
+| DS8034R | DS80604 | DS80804 | DS81004 | DS8104R | DS81304 |
+| DS8204R | DS9202 | DS9204 | DS9404 | DS9604 | MHO2024 |
+| MHO2034 | MHO5054 | MHO5056 | MHO5104 | MHO5106 | MHO934 |
+| MHO954 | MHO984 | MSO1074Z | MSO1074Z-S | MSO1104Z | MSO1104Z-S |
+| MSO2072A | MSO2072A-S | MSO2102A | MSO2102A-S | MSO2202A | MSO2202A-S |
+| MSO2302A | MSO2302A-S | MSO5072 | MSO5074 | MSO5102 | MSO5104 |
+| MSO5204 | MSO5354 | MSO7014 | MSO7024 | MSO7034 | MSO7054 |
+| MSO8064 | MSO8074A | MSO8104 | MSO8154A | MSO8204 | MSO8304A |
+| MSO9402 |  |  |  |  |  |
+
+**function generator** (31)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DG1032Z | DG1062Z | DG5071 | DG5072 | DG5101 | DG5102 |
+| DG5251 | DG5252 | DG5252PRO | DG5254PRO | DG5258PRO | DG5351 |
+| DG5352 | DG5352PRO | DG5354PRO | DG5358PRO | DG5502PRO | DG5504PRO |
+| DG5508PRO | DG6052 | DG6054 | DG6102 | DG6104 | DG70002 |
+| DG70004 | DG821PRO | DG822PRO | DG852PRO | DG902PRO | DG912PRO |
+| DG922PRO |  |  |  |  |  |
+
+**spectrum analyzer** (23)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DSA705 | DSA710 | DSA815 | DSA815-TG | DSA832 | DSA832-TG |
+| DSA875 | DSA875-TG | RSA3015E | RSA3015E-TG | RSA3030 | RSA3030-TG |
+| RSA3030E | RSA3030E-TG | RSA3045 | RSA3045-TG | RSA5032 | RSA5032-TG |
+| RSA5065 | RSA5065-TG | RSA6085 | RSA6140 | RSA6265 |  |
+
+**network analyzer** (21)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DNA5042 | DNA5082 | DNA5142 | DNA5202 | DNA5262 | DNA6082 |
+| DNA6082R | DNA6084 | DNA6084R | DNA6142 | DNA6142R | DNA6144 |
+| DNA6144R | DNA6202 | DNA6202R | DNA6204 | DNA6204R | DNA6262 |
+| DNA6262R | DNA6264 | DNA6264R |  |  |  |
+
+**power supply** (18)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DP2031 | DP711 | DP712 | DP811 | DP811A | DP813 |
+| DP813A | DP821 | DP821A | DP822 | DP822A | DP831 |
+| DP831A | DP832 | DP832A | DP932A | DP932E | DP932U |
+
+**function/arbitrary waveform generator** (12)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| DG2052 | DG2072 | DG2102 | DG811 | DG812 | DG821 |
+| DG822 | DG831 | DG832 | DG952 | DG972 | DG992 |
+
+**electronic load** (4)
+
+|  |  |  |  |
+|---|---|---|---|
+| DL3021 | DL3021A | DL3031 | DL3031A |
+
+**multimeter** (4)
+
+|  |  |  |  |
+|---|---|---|---|
+| DM3058 | DM3058E | DM858 | DM858E |
+
+**data acquisition/switch system** (1)
+
+|  |
+|---|
+| M300 |
+
+#### Keithley (85)
+
+**source measure unit** (39)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| 2400 | 2400-C | 2400-LV | 2401 | 2410 | 2410-C |
+| 2420 | 2420-C | 2425 | 2425-C | 2430 | 2430-C |
+| 2440 | 2440-C | 2450 | 2450-NFP | 2450-NFP-RACK | 2460 |
+| 2460-NFP | 2460-NFP-RACK | 2461 | 2461-NFP | 2461-NFP-RACK | 2470 |
+| 2510 | 2510-AT | 2520 | 2601B | 2601B-PULSE | 2602B |
+| 2604B | 2611B | 2612B | 2614B | 2634B | 2635B |
+| 2636B | 2651A | 2657A |  |  |  |
+
+**power supply** (36)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| 2200-20-5 | 2200-30-5 | 2200-32-3 | 2200-60-2 | 2200-72-1 | 2220-30-1 |
+| 2220G-30-1 | 2220GJ-30-1 | 2220J-30-1 | 2230-30-1 | 2230G-30-1 | 2230GJ-30-1 |
+| 2230J-30-1 | 2231A-30-3 | 2260B-250-13 | 2260B-250-4 | 2260B-250-9 | 2260B-30-108 |
+| 2260B-30-36 | 2260B-30-72 | 2260B-80-13 | 2260B-80-27 | 2260B-80-40 | 2260B-800-1 |
+| 2260B-800-2 | 2260B-800-4 | 2280S-32-6 | 2280S-60-3 | 2281S-20-6 | 2290-10 |
+| 2290-5 | 2290E-5 | 2290J-5 | 2303 | 2303-PJ | 2303B |
+
+**battery/charger simulator** (6)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| 2302 | 2302-PJ | 2306 | 2306-PJ | 2306-VS | 2308 |
+
+**electronic load** (4)
+
+|  |  |  |  |
+|---|---|---|---|
+| 2380-120-60 | 2380-500-15 | 2380J-120-60 | 2380J-500-15 |
+
+#### Tektronix (84)
+
+**arbitrary waveform generator** (40)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| AFG3011 | AFG3011C | AFG3021 | AFG3021B | AFG3021C | AFG3022B |
+| AFG3022C | AFG3051C | AFG3052C | AFG3101 | AFG3101C | AFG3102 |
+| AFG3102C | AFG3151C | AFG3152C | AFG3251 | AFG3251C | AFG3252 |
+| AFG3252C | AWG4162 | AWG5002B | AWG5002C | AWG5004B | AWG5012B |
+| AWG5012C | AWG5014B | AWG5014C | AWG5202 | AWG5204 | AWG5208 |
+| AWG70001A | AWG70001B | AWG70002A | AWG70002B | AWG7061B | AWG7062B |
+| AWG7082C | AWG7121B | AWG7122B | AWG7122C |  |  |
+
+**oscilloscope** (22)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| LPD64 | MDO32 | MDO34 | MSO44B | MSO46B | MSO54B |
+| MSO56B | MSO58B | MSO58LP | MSO64B | MSO66B | MSO68B |
+| TBS1052C | TBS1072C | TBS1102C | TBS1202C | TBS2072B | TBS2074B |
+| TBS2102B | TBS2104B | TBS2202B | TBS2204B |  |  |
+
+**arbitrary function generator** (10)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| AFG31021 | AFG31022 | AFG31051 | AFG31052 | AFG31101 | AFG31102 |
+| AFG31151 | AFG31152 | AFG31251 | AFG31252 |  |  |
+
+**power supply** (7)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| PS2520G | PS2521G | PWS4205 | PWS4305 | PWS4323 | PWS4602 |
+| PWS4721 |  |  |  |  |  |
+
+**source measure unit** (3)
+
+|  |  |  |
+|---|---|---|
+| MP5103 | MPSU50-2ST | MSMU60-2 |
+
+**function generator** (2)
+
+|  |  |
+|---|---|
+| AFG1022 | AFG1062 |
+
+#### EA Elektro-Automatik (29)
+
+**power supply** (29)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| EA-BT-20000 | EA-BT-20000-TRIPLE | EA-EL9000-2Q | EA-EL9000B | EA-EL9000DT | EA-EL9000HP |
+| EA-EL9000T | EA-ELM5000 | EA-ELR-10000 | EA-ELR5000 | EA-ELR9000 | EA-ELR9000HP |
+| EA-PS-10000 | EA-PS9000-1U | EA-PS9000-2U | EA-PS9000-3U | EA-PS9000-T | EA-PSB-10000 |
+| EA-PSBE-10000 | EA-PSI-10000 | EA-PSI9000-15U-24U | EA-PSI9000-2U | EA-PSI9000-3U | EA-PSI9000-DT |
+| EA-PSI9000-T | EA-PSI9000-WR | EA-PU-10000 | EA-PUB-10000 | EA-PUL-10000 |  |
+
+#### Rohde & Schwarz (22)
+
+**power supply** (14)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| HMP2020 | HMP2030 | HMP4030 | HMP4040 | NGC101 | NGC101-G |
+| NGC102 | NGC102-G | NGC103 | NGC103-G | NGL201 | NGL202 |
+| NGM201 | NGM202 |  |  |  |  |
+
+**oscilloscope** (8)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| MXO34 | MXO38 | RTA4004 | RTB2002 | RTB2004 | RTC1002 |
+| RTM3002 | RTM3004 |  |  |  |  |
+
+#### B&K Precision (15)
+
+**oscilloscope** (6)
+
+|  |  |  |  |  |  |
+|---|---|---|---|---|---|
+| 2565B | 2565B-MSO | 2567B | 2567B-MSO | 2569B | 2569B-MSO |
+
+**power supply** (5)
+
+|  |  |  |  |  |
+|---|---|---|---|---|
+| 1696B | 1697B | 1698B | BCS6401 | BCS6402 |
+
+**multimeter** (2)
+
+|  |  |
+|---|---|
+| 2831E | 5491B |
+
+**signal generator** (2)
+
+|  |  |
+|---|---|
+| 4088 | 4089 |
+
 ## Install
 
 HIL is in **active development** and is not on PyPI yet — the `hil` name there is an
