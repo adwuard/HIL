@@ -1,0 +1,32 @@
+# Rigol DHO1072 digital oscilloscope — hand-curated profile.
+slug: rigol-dho1072
+manufacturer: Rigol
+model: DHO1072
+category: oscilloscope
+series: DHO1000/DHO4000 Series
+description: 2-channel, 70 MHz digital oscilloscope.
+interfaces:
+  - lan
+  - usb
+connection_examples:
+  - tcp://192.168.1.9:5025
+capabilities:
+  - capture-waveform
+  - measure-frequency
+safety:
+  blocked:
+    - CAL.*
+commands:
+  - name: run
+    syntax: ":RUN"
+    description: Start acquisition.
+    query: false
+  - name: stop
+    syntax: ":STOP"
+    description: Stop acquisition.
+    query: false
+  - name: measure-frequency
+    syntax: ":MEAS:FREQ?"
+    description: Measure frequency on the active channel.
+    query: true
+    returns: { type: number, unit: Hz }

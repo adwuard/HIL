@@ -1,0 +1,60 @@
+# Keithley 2400 SourceMeter — hand-curated, safety-reviewed profile.
+# Only the commands an agent needs for basic source/measure work are listed,
+# with hard safety limits; calibration is blocked outright.
+slug: keithley-2400
+manufacturer: Keithley
+model: '2400'
+category: source-measure-unit
+series: Series 2400 SourceMeter
+description: Bench source-measure unit (SMU) — sources and measures voltage and current.
+interfaces:
+  - gpib
+  - rs-232
+connection_examples:
+  - visa://GPIB::24::INSTR
+  - tcp://192.168.1.5:5025
+capabilities:
+  - source-dc-voltage
+  - source-dc-current
+  - measure-dc-voltage
+  - measure-dc-current
+safety:
+  blocked:
+    - CAL.*
+  limits:
+    voltage: 0..200 V
+    current: 0..1 A
+    power: 20 W
+commands:
+  - name: set-source-voltage
+    syntax: ":SOUR:VOLT <v>"
+    description: Set the source voltage.
+    subsystem: SOURce
+    query: false
+    parameters: "<v> in volts, 0..200"
+    examples:
+      - ":SOUR:VOLT 3.3"
+  - name: set-source-function
+    syntax: ":SOUR:FUNC <func>"
+    description: Select the source function (VOLT or CURR).
+    subsystem: SOURce
+    query: false
+    parameters: "<func> = VOLT | CURR"
+  - name: set-output
+    syntax: ":OUTP <state>"
+    description: Enable or disable the output.
+    subsystem: OUTPut
+    query: false
+    parameters: "<state> = ON | OFF"
+  - name: measure-voltage
+    syntax: ":MEAS:VOLT?"
+    description: Measure the output voltage.
+    subsystem: MEASure
+    query: true
+    returns: { type: number, unit: V }
+  - name: measure-current
+    syntax: ":MEAS:CURR?"
+    description: Measure the output current.
+    subsystem: MEASure
+    query: true
+    returns: { type: number, unit: A }

@@ -1,0 +1,21 @@
+# Run:  hil bench run examples/bench/scope-vertical-setup.yaml
+# Dry-runs on the simulator; add `--address tcp://<ip>:5025` for a real DHO1072.
+name: Scope vertical setup + Vpp
+description: Put CH1 at 1 V/div on a Rigol DHO1072 and sanity-check a Vpp reading.
+device: rigol-dho1072
+variables:
+  vdiv: 1.0
+sim:
+  idn: "RIGOL,DHO1072,SN0001,00.01.00"
+  responses:
+    ":CHAN1:SCAL?": "1.000E+00"
+    ":MEAS:VPP?": "3.24"
+steps:
+  - reset
+  - write: ":CHAN1:DISP ON"
+  - write: ":CHAN1:SCAL ${vdiv}"
+  - query: {command: ":CHAN1:SCAL?", save_as: scal}
+  - assert: {that: scal, op: approx, value: "1.0±0.01", message: "1 V/div applied"}
+  - measure: {command: ":MEAS:VPP?", save_as: vpp, units: V}
+  - assert: {that: vpp, op: within, value: "0..100", message: "Vpp plausible"}
+  - errors: {expect: none}

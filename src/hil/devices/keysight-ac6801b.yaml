@@ -1,0 +1,38 @@
+# Keysight AC6801B AC power source — query-only by default (shared-lab mode).
+# The allow-list means an agent can read measurements but never reconfigure
+# or energise the output without an explicit policy change.
+slug: keysight-ac6801b
+manufacturer: Keysight
+model: AC6801B
+category: ac-power-source
+series: AC6800 Series
+description: Bench AC power source; this curated profile is read-only by default.
+interfaces:
+  - lan
+  - usb
+connection_examples:
+  - tcp://192.168.1.7:5025
+capabilities:
+  - source-ac-voltage
+  - measure-ac-voltage
+  - measure-ac-current
+safety:
+  allow:
+    - '\*IDN\?'
+    - 'MEAS:VOLT\?'
+    - 'MEAS:CURR\?'
+commands:
+  - name: identify
+    syntax: "*IDN?"
+    description: Identity string.
+    query: true
+  - name: measure-voltage
+    syntax: "MEAS:VOLT?"
+    description: Measure output RMS voltage.
+    query: true
+    returns: { type: number, unit: V }
+  - name: measure-current
+    syntax: "MEAS:CURR?"
+    description: Measure output RMS current.
+    query: true
+    returns: { type: number, unit: A }

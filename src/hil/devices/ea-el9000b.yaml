@@ -1,0 +1,37 @@
+# EA EL9000B electronic load — hand-curated profile.
+slug: ea-el9000b
+manufacturer: EA
+model: EL9000B
+category: electronic-load
+series: EL 9000 B
+description: Bench electronic load for sinking current from supplies under test.
+interfaces:
+  - lan
+  - usb
+connection_examples:
+  - tcp://192.168.1.11:5025
+capabilities:
+  - sink-dc-current
+  - measure-dc-voltage
+safety:
+  blocked:
+    - CAL.*
+  limits:
+    current: 0..40 A
+    power: 0..800 W
+commands:
+  - name: set-current
+    syntax: ":CURR <i>"
+    description: Set the sink current.
+    query: false
+    parameters: "<i> in amperes, 0..40"
+  - name: set-input
+    syntax: ":INP <state>"
+    description: Enable or disable the load input.
+    query: false
+    parameters: "<state> = ON | OFF"
+  - name: measure-voltage
+    syntax: ":MEAS:VOLT?"
+    description: Measure the input voltage.
+    query: true
+    returns: { type: number, unit: V }

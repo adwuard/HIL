@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.DS_Store
+
+# scraper working output + HTTP cache (generated; re-create with `hil scrape ...`)
+scraped/
+.cache/
+
+# NOTE: data/ holds *versioned* corpus snapshots (tar.gz + index) and IS tracked.
+# Only the working scraped/ tree above is ignored.
+
+specs.md
+.cc-history/

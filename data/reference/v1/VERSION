@@ -1,0 +1,17 @@
+dataset:         SCPI instrument reference corpus
+version:         v1
+schema_version:  1.0
+hil_version:     0.1.0
+generated_at:    2026-10-22T15:47:05+00:00
+source:          https://reference.invalid/equipment   (sanitized; real host redacted)
+
+devices:         725
+commands:        294478
+  queries:       83313
+  setters:       211165
+vendors:         7
+categories:      17
+
+archive:         reference-corpus-v1.tar.gz
+archive_files:   1453
+archive_sha256:  9479585524a81e2b3024cc9e49a4006aacb22997924ced535981fa233cb54a1f

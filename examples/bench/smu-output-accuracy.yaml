@@ -1,0 +1,24 @@
+# Run:  hil bench run examples/bench/smu-output-accuracy.yaml
+# Dry-runs on the built-in simulator (no --address). Add
+# `--address tcp://<ip>:5025` to drive a real Keithley 2400.
+name: SMU output accuracy
+description: Source 3.3 V on a Keithley 2400, then verify voltage and current.
+device: keithley-2400
+variables:
+  vset: 3.3
+sim:
+  idn: "KEITHLEY,2400,SN123456,C33"
+  responses:
+    ":MEAS:VOLT?": "3.301"
+    ":MEAS:CURR?": "0.052"
+steps:
+  - log: "sourcing ${vset} V and reading back"
+  - reset
+  - write: ":SOUR:FUNC VOLT"
+  - write: ":SOUR:VOLT ${vset}"
+  - opc
+  - measure: {command: ":MEAS:VOLT?", save_as: vout, units: V}
+  - assert: {that: vout, op: within, value: "3.267..3.333", message: "output within 1%"}
+  - measure: {command: ":MEAS:CURR?", save_as: iout, units: A}
+  - assert: {that: iout, op: lt, value: 1.0, message: "current under the 1 A limit"}
+  - errors: {expect: none}
