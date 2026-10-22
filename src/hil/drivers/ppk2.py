@@ -13,16 +13,16 @@ registry safety policy, bench procedures, ``--sim`` dry-runs and CLI ``--json``:
     *IDN?  :SOUR:VOLT <mV>  :SOUR:VOLT?  :OUTP ON|OFF  :CONF:MODE SOUR|AMP
     :INIT:ACQ  :MEAS:STOP  :MEAS:CURR?  :MEAS:POWer?
 
-The PPK2's **8 digital I/O channels** (DIO0..DIO7) are exposed the same way::
+The PPK2's **8 digital channels** (D0..D7) are *inputs only* — a low-end logic
+analyzer for correlating code activity with power, not drivable outputs::
 
-    :DIG<n>:DIR IN|OUT   :DIG<n> ON|OFF|0|1   :DIG<n>?
-    :DIG:PORT <0..255>   :DIG:PORT?
+    :DIG<n>?   :DIG:PORT?
 
-Digital verbs are *optional* on the backend: the bundled :class:`Ppk2ApiBackend`
-raises a clear error because upstream ``ppk2-api`` does not drive them yet, while
-an injected backend that implements ``read_digital``/``write_digital`` lights them
-up automatically. ``capture("digital")`` streams the 8-bit port word so current
-spikes can be correlated with logic edges.
+The read verbs are *optional* on the backend: the bundled :class:`Ppk2ApiBackend`
+raises a clear error because upstream ``ppk2-api`` does not expose them yet, while
+an injected backend that implements ``read_digital`` lights them up automatically.
+``capture("digital")`` streams the 8-bit input word so current spikes can be
+correlated with logic edges.
 
 Native 100 kSps sampling powers :meth:`Ppk2Instrument.capture` (µA → A, or W
 when the channel is power), which the telemetry layer logs durably.
@@ -44,10 +44,15 @@ _UA_TO_A = 1e-6
 _DIG_PINS = 8
 
 _UNSUPPORTED_DIGITAL = (
-    "ppk2 driver: this backend does not expose the PPK2's 8 digital I/O channels. "
+    "ppk2 driver: this backend does not expose the PPK2's 8 digital input channels. "
     "The bundled ppk2-api backend lacks them (upstream marks the digital/GUI "
-    "feature set 'in progress'). Inject a backend that implements "
-    "read_digital/write_digital/set_digital_direction via Ppk2Instrument(backend=...)."
+    "feature set 'in progress'). Inject a backend that implements read_digital "
+    "via Ppk2Instrument(backend=...)."
+)
+_DIGITAL_INPUT_ONLY = (
+    "ppk2 driver: the PPK2's 8 digital channels are inputs only (a logic-analyzer "
+    "feature) and cannot be driven as outputs. Read them with ':DIG<n>?' or "
+    "':DIG:PORT?'."
 )
 
 
@@ -63,11 +68,8 @@ class Ppk2Backend(Protocol):
     def read_samples(self) -> list[float]: ...   # returns µA values
     def close(self) -> None: ...
     def info(self) -> str: ...
-    # -- optional: 8 digital I/O channels (DIO0..DIO7) ----------------------
-    def set_digital_direction(self, pin: int, output: bool) -> None: ...
-    def write_digital(self, pin: int, value: bool) -> None: ...
-    def write_digital_port(self, value: int) -> None: ...
-    def read_digital(self) -> int: ...           # returns the 8-bit port word
+    # -- optional: 8 digital input channels (D0..D7) -----------------------
+    def read_digital(self) -> int: ...           # returns the 8-bit input word
 
 
 def _maybe_call(api: Any, *names: str, default: Any = None) -> Any:
@@ -149,30 +151,9 @@ class Ppk2ApiBackend:
     def info(self) -> str:
         return f"ppk2-api@{self.port}"
 
-    # -- optional digital I/O ----------------------------------------------
-    # ppk2-api does not implement these yet; each raises a clear, actionable
-    # error unless a future/alternative backend exposes the method.
-
-    def set_digital_direction(self, pin: int, output: bool) -> None:
-        fn = _first_callable(
-            self._load(), "set_digital_direction", "set_gpio_direction",
-            "configure_digital", "set_digital_mode",
-        )
-        if fn is None:
-            raise HilError(_UNSUPPORTED_DIGITAL)
-        fn(int(pin), bool(output))
-
-    def write_digital(self, pin: int, value: bool) -> None:
-        fn = _first_callable(self._load(), "write_digital", "set_digital", "set_gpio")
-        if fn is None:
-            raise HilError(_UNSUPPORTED_DIGITAL)
-        fn(int(pin), bool(value))
-
-    def write_digital_port(self, value: int) -> None:
-        fn = _first_callable(self._load(), "write_digital_port", "set_digital_port")
-        if fn is None:
-            raise HilError(_UNSUPPORTED_DIGITAL)
-        fn(int(value) & 0xFF)
+    # -- optional digital inputs ------------------------------------------
+    # ppk2-api does not implement these yet; read_digital raises a clear,
+    # actionable error unless a future/alternative backend exposes the method.
 
     def read_digital(self) -> int:
         fn = _first_callable(
@@ -201,9 +182,6 @@ class Ppk2Instrument(BaseInstrument):
         self.backend.connect()
         self._vset_mv = 0
         self._measuring = False
-        # cached digital state: direction (True=output) and last-written levels
-        self._dio_dir = [False] * _DIG_PINS
-        self._dio_out = [0] * _DIG_PINS
 
     # -- identity -----------------------------------------------------------
     def idn(self) -> str:
@@ -235,36 +213,14 @@ class Ppk2Instrument(BaseInstrument):
             self.backend.stop()
             self._measuring = False
         elif head.startswith(":DIG"):
-            self._write_digital(head, arg, cmd)
+            raise HilError(_DIGITAL_INPUT_ONLY)
         else:
             raise HilError(
                 f"ppk2 driver: unsupported write '{cmd}' — see the nordic-ppk2 "
                 "device profile for the supported pseudo-SCPI set"
             )
 
-    # -- digital I/O (8 channels, DIO0..DIO7) ------------------------------
-    def _write_digital(self, head: str, arg: str, cmd: str) -> None:
-        rest = head[4:]  # everything after ':DIG'
-        if rest == ":PORT":
-            port = int(float(arg)) & 0xFF
-            self.backend.write_digital_port(port)
-            self._dio_out = [(port >> i) & 1 for i in range(_DIG_PINS)]
-            return
-        m = re.fullmatch(r"(\d+)(:DIR)?", rest)
-        if not m:
-            raise HilError(f"ppk2 driver: unsupported digital write '{cmd}'")
-        pin = int(m.group(1))
-        if not 0 <= pin < _DIG_PINS:
-            raise HilError(f"ppk2 driver: digital pin must be 0..{_DIG_PINS - 1}, got {pin}")
-        if m.group(2):  # :DIG<n>:DIR IN|OUT
-            output = arg.startswith("OUT") or arg == "1"
-            self.backend.set_digital_direction(pin, output)
-            self._dio_dir[pin] = output
-        else:           # :DIG<n> ON|OFF|0|1
-            value = arg.startswith("ON") or arg == "1"
-            self.backend.write_digital(pin, value)
-            self._dio_out[pin] = 1 if value else 0
-
+    # -- digital inputs (8 channels, D0..D7; read-only) --------------------
     def _read_port(self) -> int:
         return int(self.backend.read_digital()) & 0xFF
 
@@ -331,7 +287,7 @@ class Ppk2Instrument(BaseInstrument):
         """Native high-rate capture.
 
         Channels: ``current``/``:MEAS:CURR?`` → amperes; ``power``/``:MEAS:POW?``
-        → watts (V·I); ``digital``/``:DIG:PORT?`` → the 8-bit port word polled at
+        → watts (V·I); ``digital``/``:DIG:PORT?`` → the 8-bit input word polled at
         ``interval`` (for correlating current with logic edges).
         """
         ch = (channel or "current").lower()
@@ -346,7 +302,7 @@ class Ppk2Instrument(BaseInstrument):
         while time.monotonic() < end:
             ts = time.time()
             if as_digital:
-                out.append(Sample(ts=ts, channel=channel, value=float(self._read_port()), units=units or "port"))
+                out.append(Sample(ts=ts, channel=channel, value=float(self._read_port()), units=units or "input"))
             else:
                 for ua in self.backend.read_samples():
                     amps = ua * _UA_TO_A

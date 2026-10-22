@@ -159,25 +159,27 @@ from hil import connect
 ppk2 = connect("ppk2:///dev/cu.usbmodem01", device_slug="nordic-ppk2")
 ppk2.write(":SOUR:VOLT 3300")    # pseudo-SCPI facade -> native ppk2-api calls
 samples = ppk2.capture(":MEAS:CURR?", seconds=5, units="A")
+print(ppk2.query(":DIG:PORT?"))  # 8-bit word from the digital *input* channels
 ```
 
 The bundled **PPK2** driver wraps Nordic's open-source
 [`ppk2-api`](https://github.com/IRNAS/ppk2-api-python) behind a small pseudo-SCPI
 facade (`:SOUR:VOLT`, `:OUTP`, `:CONF:MODE`, `:INIT:ACQ`, `:MEAS:CURR?`,
-`:MEAS:POWer?`, plus the **8 digital I/O channels** via `:DIG<n>:DIR IN|OUT`,
-`:DIG<n> ON|OFF`, `:DIG<n>?`, `:DIG:PORT <0..255>`, `:DIG:PORT?`). Because
-`ppk2-api` is **GPLv2** and HIL is **MIT**, the backend is an *optional,
-user-installed* extra — never vendored into the core:
+`:MEAS:POWer?`, plus the **8 digital input channels** via `:DIG<n>?` and
+`:DIG:PORT?`). Because `ppk2-api` is **GPLv2** and HIL is **MIT**, the backend is an
+*optional, user-installed* extra — never vendored into the core:
 
 ```bash
 pip install 'hil-harness[ppk2]'   # pulls in ppk2-api; the ppk2 driver activates
 ```
 
-> The digital channels are optional on the backend: `ppk2-api` doesn't drive them
-> yet, so the facade raises a clear, actionable error — and they light up
-> automatically for any injected backend that implements `read_digital` /
-> `write_digital` / `set_digital_direction`. `capture("digital")` streams the
-> 8-bit port word so you can correlate current spikes with logic edges.
+> The PPK2's 8 digital channels are **inputs only** — a low-end logic analyzer for
+> correlating code activity with power, not drivable outputs (any `:DIG...` write
+> raises a clear error). Reading is optional on the backend: `ppk2-api` doesn't
+> expose the digital channels yet, so the facade raises an actionable error and
+> lights up automatically for any injected backend that implements `read_digital`.
+> `capture("digital")` streams the 8-bit input word so you can line up current
+> spikes with logic edges.
 
 ### Bring your own driver (OCD, logic analyzer, CDC power supply)
 

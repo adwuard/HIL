@@ -16,7 +16,7 @@ capabilities:
   - measure-dc-current
   - measure-power
   - source-dc-voltage
-  - digital-io-8ch
+  - digital-input-8ch
 safety:
   # Source mode is 0.8..5 V @ 1 A; keep the DUT inside that envelope.
   limits:
@@ -51,21 +51,11 @@ commands:
     syntax: ':MEAS:POWer?'
     query: true
     description: Mean power (V x I) over a short window, in watts.
-  - name: digital-direction
-    syntax: ':DIG<n>:DIR <dir>'
-    description: Set a digital channel (n = 0..7) as an input (IN) or output (OUT).
-    parameters: '<dir> = IN | OUT'
-  - name: digital-write
-    syntax: ':DIG<n> <state>'
-    description: Drive a digital output channel high (ON/1) or low (OFF/0).
   - name: digital-read
     syntax: ':DIG<n>?'
     query: true
-    description: Read one digital channel (n = 0..7) as 0 or 1.
-  - name: digital-port
-    syntax: ':DIG:PORT <value>'
-    description: Write all 8 digital channels at once (0..255).
+    description: Read one digital input channel (n = 0..7) as 0 or 1.
   - name: digital-port-read
     syntax: ':DIG:PORT?'
     query: true
-    description: Read all 8 digital channels as one 8-bit word (0..255).
+    description: Read all 8 digital input channels as one 8-bit word (0..255).

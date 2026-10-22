@@ -28,8 +28,7 @@ class FakeBackend:
         self.mode = None
         self.measuring = False
         self.closed = False
-        self.dio_dir = [False] * 8
-        self.dio = [0] * 8
+        self.dio_in = 0   # 8-bit digital input word (D0..D7); inputs only
         self.log: list = []
 
     def connect(self): self.log.append("connect")
@@ -42,16 +41,11 @@ class FakeBackend:
     def close(self): self.closed = True
     def info(self): return "fake"
 
-    # -- 8 digital I/O channels --------------------------------------------
-    def set_digital_direction(self, pin, output):
-        self.dio_dir[pin] = bool(output); self.log.append(("dir", pin, output))
-    def write_digital(self, pin, value):
-        self.dio[pin] = 1 if value else 0; self.log.append(("dio", pin, value))
-    def write_digital_port(self, value):
-        value &= 0xFF
-        self.dio = [(value >> i) & 1 for i in range(8)]; self.log.append(("port", value))
+    # -- 8 digital input channels (read-only) ------------------------------
+    def set_digital_input(self, value):
+        self.dio_in = int(value) & 0xFF
     def read_digital(self):
-        return sum(b << i for i, b in enumerate(self.dio))
+        return self.dio_in
 
 
 def test_driver_registry_has_builtins():
@@ -144,35 +138,38 @@ def test_ppk2_driver_requires_port():
         ppk2_driver(Address(scheme="ppk2", path=""), None, 5.0)
 
 
-def test_ppk2_digital_facade():
+def test_ppk2_digital_input_read():
     be = FakeBackend()
     inst = Ppk2Instrument("COM3", backend=be)
-    inst.write(":DIG0:DIR OUT")
-    assert be.dio_dir[0] is True
-    inst.write(":DIG0 ON")
+    be.set_digital_input(0b00000101)               # D0 and D2 high
+    assert inst.query(":DIG:PORT?") == "5"
     assert inst.query(":DIG0?") == "1"
-    inst.write(":DIG1 1")
-    assert inst.query(":DIG:PORT?") == "3"        # bits 0 and 1 set
-    inst.write(":DIG:PORT 0")
-    assert inst.query(":DIG:PORT?") == "0"
-    inst.write(":DIG7:DIR IN")
-    assert be.dio_dir[7] is False
+    assert inst.query(":DIG1?") == "0"
+    assert inst.query(":DIG2?") == "1"
+
+
+def test_ppk2_digital_channels_are_input_only():
+    inst = Ppk2Instrument("COM3", backend=FakeBackend())
+    with pytest.raises(HilError):                  # no output drive on the PPK2
+        inst.write(":DIG0 ON")
+    with pytest.raises(HilError):
+        inst.write(":DIG:PORT 255")
+    with pytest.raises(HilError):
+        inst.write(":DIG0:DIR OUT")
 
 
 def test_ppk2_digital_pin_bounds():
     inst = Ppk2Instrument("COM3", backend=FakeBackend())
     with pytest.raises(HilError):
-        inst.write(":DIG9 ON")                     # only 0..7 exist
-    with pytest.raises(HilError):
-        inst.query(":DIG8?")
+        inst.query(":DIG8?")                       # only 0..7 exist
 
 
 def test_ppk2_capture_digital_channel():
     be = FakeBackend()
     inst = Ppk2Instrument("COM3", backend=be)
-    inst.write(":DIG:PORT 5")
+    be.set_digital_input(5)
     samples = inst.capture("digital", seconds=0.12, interval=0.04)
-    assert samples and all(s.units == "port" for s in samples)
+    assert samples and all(s.units == "input" for s in samples)
     assert all(s.value == 5 for s in samples)
     assert be.measuring is False                   # digital capture does not start current
 
@@ -184,5 +181,3 @@ def test_ppk2_api_backend_digital_unsupported_raises():
     be._api = object()                             # bypass lazy ppk2-api import
     with pytest.raises(HilError):
         be.read_digital()
-    with pytest.raises(HilError):
-        be.write_digital(0, True)
