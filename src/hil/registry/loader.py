@@ -78,6 +78,7 @@ def load_device_file(path: Path) -> Device:
         manufacturer=str(data["manufacturer"]),
         model=str(data["model"]),
         category=str(data.get("category", "")),
+        driver=str(data.get("driver", "scpi") or "scpi"),
         series=str(data.get("series", "")),
         description=str(data.get("description", "")),
         manual=str(data.get("manual", "")),

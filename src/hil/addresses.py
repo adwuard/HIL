@@ -5,6 +5,7 @@ Supported address forms:
     tcp://host[:port]                 raw SCPI socket (default port 5025)
     serial://PORT[?baud=9600]         RS-232, e.g. serial:///dev/ttyUSB0?baud=9600
     visa://VISA_RESOURCE              any VISA resource, e.g. visa://GPIB::24::INSTR
+    ppk2://PORT                       Nordic Power Profiler Kit II (non-SCPI driver)
     GPIB::24::INSTR                   bare VISA resource (auto-detected by '::')
 
 A bare word that is not an address (e.g. ``keithley-2400``) is treated as a
@@ -21,7 +22,7 @@ from .errors import AddressError
 DEFAULT_SCPI_PORT = 5025
 DEFAULT_BAUD = 9600
 
-SUPPORTED_SCHEMES = ("tcp", "serial", "visa")
+SUPPORTED_SCHEMES = ("tcp", "serial", "visa", "ppk2")
 
 
 @dataclass(frozen=True)
@@ -29,7 +30,7 @@ class Address:
     """A parsed instrument address."""
 
     scheme: str
-    """Transport scheme: 'tcp', 'serial', or 'visa'."""
+    """Transport scheme: 'tcp', 'serial', 'visa', or 'ppk2'."""
 
     host: str = ""
     """Remote host (tcp)."""
@@ -49,6 +50,8 @@ class Address:
         if self.scheme == "serial":
             qs = "".join(f"&{k}={v}" for k, v in self.params.items())
             return f"serial://{self.path}{qs}"
+        if self.scheme == "ppk2":
+            return f"ppk2://{self.path}"
         return f"visa://{self.path}"
 
 
@@ -105,6 +108,12 @@ def parse_address(raw: str) -> Address:
         else:
             params["baud"] = str(DEFAULT_BAUD)
         return Address(scheme="serial", path=path, params=params)
+
+    if scheme == "ppk2":
+        # ppk2://PORT — a serial port path (COM3, /dev/ttyACM0, /dev/cu.usbmodem*)
+        if not rest:
+            raise AddressError(f"Missing serial port in ppk2 address '{raw}'.")
+        return Address(scheme="ppk2", path=unquote(rest))
 
     # visa:// — everything after the scheme is the resource string
     if not rest:

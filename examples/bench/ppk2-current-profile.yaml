@@ -1,0 +1,32 @@
+# Run:  hil bench run examples/bench/ppk2-current-profile.yaml
+# Dry-runs on the built-in simulator (no --address). Add
+# `--address ppk2:///dev/cu.usbmodem01` to drive a real Nordic PPK2
+# (install the optional backend first:  pip install 'hil-harness[ppk2]').
+name: PPK2 current profile
+description: >
+  Source 3.3 V from a Nordic PPK2, capture a current profile, then check the
+  average draw stays inside the DUT budget.
+device: nordic-ppk2
+variables:
+  vset_mv: 3300
+sim:
+  idn: "Nordic,PPK2,SIM,ppk2-api"
+  responses:
+    ":SOUR:VOLT?": "3300"
+    ":MEAS:CURR?": "0.048"
+    ":MEAS:POWer?": "0.158"
+steps:
+  - log: "powering the DUT at ${vset_mv} mV and profiling current"
+  - write: ":CONF:MODE SOUR"
+  - write: ":SOUR:VOLT ${vset_mv}"
+  - write: ":OUTP ON"
+  - write: ":INIT:ACQ"
+  - capture:
+      channel: ":MEAS:CURR?"
+      seconds: 0.2
+      interval: 0.05
+      units: A
+      save_as: iavg
+  - assert: {that: iavg, op: within, value: "0.040..0.060", message: "average draw in budget"}
+  - write: ":MEAS:STOP"
+  - write: ":OUTP OFF"

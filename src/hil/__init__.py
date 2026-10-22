@@ -13,11 +13,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import addresses, errors, registry, scpi, transports
+from . import addresses, drivers, errors, instrument, registry, scpi, telemetry, transports
 from .addresses import Address, parse_address
 from .errors import HilError
+from .instrument import BaseInstrument, Instrument
 from .registry import Device, load_registry
 from .scpi import ScpiInstrument
+from .telemetry import DataLogger, Sample, summarize
 from .transports import BaseTransport, TcpTransport, create_transport
 
 __version__ = "0.1.0"
@@ -28,15 +30,23 @@ __all__ = [
     "parse_address",
     "Address",
     "HilError",
+    "Instrument",
+    "BaseInstrument",
     "ScpiInstrument",
     "Device",
     "load_registry",
+    "Sample",
+    "DataLogger",
+    "summarize",
     "TcpTransport",
     "BaseTransport",
     "addresses",
+    "drivers",
     "errors",
+    "instrument",
     "registry",
     "scpi",
+    "telemetry",
     "transports",
 ]
 
@@ -78,11 +88,13 @@ def connect(
     device_slug: str | None = None,
     timeout: float = 5.0,
     registry_dirs: tuple[Path, ...] = (),
-) -> ScpiInstrument:
+) -> Instrument:
     """Connect to an instrument by address or registry slug.
 
-    Returns an opened :class:`ScpiInstrument`. When connecting by address,
-    pass ``device_slug`` to attach that device's safety policy.
+    Returns an opened :class:`~hil.instrument.Instrument`. The concrete driver is
+    chosen from the device profile's ``driver:`` field (default ``scpi``) or the
+    address scheme (``ppk2://`` selects the PPK2 driver). When connecting by
+    address, pass ``device_slug`` to attach that device's safety policy.
     """
     devices = load_registry(registry_dirs) if registry_dirs else None
     addr, device = resolve_target(target, devices)
@@ -93,6 +105,8 @@ def connect(
                 f"Unknown device slug '{device_slug}'. See 'hil devices list'."
             )
         device = devices[device_slug]
-    transport = create_transport(addr, timeout=timeout)
-    transport.open()
-    return ScpiInstrument(transport, device=device, timeout=timeout)
+
+    driver = (getattr(device, "driver", "scpi") or "scpi")
+    if addr.scheme == "ppk2":
+        driver = "ppk2"
+    return drivers.get_driver(driver)(addr, device, timeout)

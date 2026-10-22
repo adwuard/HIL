@@ -5,6 +5,8 @@
     hil exec <addr> '*IDN?' 'MEAS:VOLT?'     # run commands; '?' = query
     hil errors <addr>                         # drain SYST:ERR?
     hil devices list | show <slug>            # registry
+    hil log <addr> --channel :MEAS:CURR? --seconds 30 --out run.ndjson
+    hil analyze run.ndjson                    # summarize a capture
     hil doctor                                # env + backend availability
 """
 
@@ -19,6 +21,7 @@ from typing import Sequence
 from . import __version__, connect, load_registry
 from .errors import HilError
 from .registry import Device
+from .telemetry import DataLogger, iter_channels, read_samples, summarize
 from .transports import backend_status
 
 
@@ -71,6 +74,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     _add_scrape_parser(sub, sub_common)
     _add_bench_parser(sub, sub_common)
+    _add_telemetry_parsers(sub, sub_common)
 
     sub.add_parser("doctor", help="environment and backend availability", parents=[sub_common])
     return parser
@@ -211,6 +215,39 @@ def _add_bench_parser(
     ip.add_argument("--force", action="store_true", help="overwrite if it exists")
 
 
+def _add_telemetry_parsers(
+    sub: argparse._SubParsersAction, sub_common: argparse.ArgumentParser
+) -> None:
+    """`hil log` (capture) and `hil analyze` (summarize) — long-run telemetry."""
+    lp = sub.add_parser(
+        "log", help="capture timestamped telemetry to a file", parents=[sub_common]
+    )
+    lp.add_argument(
+        "address",
+        help="address (tcp://host:5025, ppk2://PORT, ...) or device slug",
+    )
+    lp.add_argument(
+        "--channel", required=True,
+        help="query/channel to sample, e.g. ':MEAS:CURR?' (SCPI) or 'current'/'power' (PPK2)",
+    )
+    lp.add_argument("--seconds", type=float, default=10.0, help="capture duration (default 10)")
+    lp.add_argument(
+        "--interval", type=float, default=None,
+        help="seconds between polls for query devices (default 0.1)",
+    )
+    lp.add_argument("--units", default="", help="unit label for samples (A, V, W, ...)")
+    lp.add_argument("--out", default=None, help="capture file (.ndjson default, or .csv)")
+    lp.add_argument("--device", help="slug for safety policy when using a raw address")
+    lp.add_argument("--sim", action="store_true", help="hardware-free dry-run on the simulator")
+    lp.add_argument("--sim-value", default="1.0", help="simulated reply for --sim (default 1.0)")
+
+    ap = sub.add_parser(
+        "analyze", help="summarize a captured telemetry file", parents=[sub_common]
+    )
+    ap.add_argument("file", help="capture file (.ndjson/.jsonl/.csv)")
+    ap.add_argument("--md", action="store_true", help="print a Markdown table")
+
+
 # -- output helpers -----------------------------------------------------------
 
 
@@ -237,7 +274,7 @@ def cmd_probe(args: argparse.Namespace) -> int:
         identity = inst.identify()
         ok = inst.opc()
     finally:
-        inst.transport.close()
+        inst.close()
     _emit(
         args,
         {"ok": ok, "address": args.address, "identity": identity},
@@ -260,7 +297,7 @@ def cmd_idn(args: argparse.Namespace) -> int:
         raw = inst.idn()
         identity = inst.identify()
     finally:
-        inst.transport.close()
+        inst.close()
     _emit(args, {"idn": raw, **identity}, raw)
     return 0
 
@@ -272,7 +309,7 @@ def cmd_exec(args: argparse.Namespace) -> int:
     try:
         results = [inst.safe_execute(c) for c in args.commands]
     finally:
-        inst.transport.close()
+        inst.close()
     ok = all(r["ok"] for r in results)  # type: ignore[index]
     if args.json:
         _emit(args, {"ok": ok, "results": results}, "")
@@ -296,7 +333,7 @@ def cmd_errors(args: argparse.Namespace) -> int:
     try:
         errors = inst.drain_errors()
     finally:
-        inst.transport.close()
+        inst.close()
     if args.json:
         _emit(args, {"errors": errors}, "")
     else:
@@ -588,6 +625,93 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 0
 
 
+def _log_instrument(args: argparse.Namespace):
+    """Build the instrument for `hil log` (real target, or simulator dry-run)."""
+    if args.sim:
+        from .bench.sim import DEFAULT_IDN, SimTransport
+        from .scpi import ScpiInstrument
+
+        transport = SimTransport(
+            responses={args.channel: str(args.sim_value)},
+            idn=DEFAULT_IDN,
+            default_query_reply=str(args.sim_value),
+            timeout=args.timeout,
+        )
+        transport.open()
+        device = load_registry().get(args.device) if args.device else None
+        return ScpiInstrument(transport, device=device, timeout=args.timeout)
+    return connect(args.address, device_slug=args.device, timeout=args.timeout)
+
+
+def cmd_log(args: argparse.Namespace) -> int:
+    inst = _log_instrument(args)
+    try:
+        samples = inst.capture(args.channel, args.seconds, args.interval, args.units)
+    finally:
+        inst.close()
+    stats = summarize(samples, args.units)
+    out = None
+    if args.out:
+        with DataLogger(args.out) as log:
+            log.writemany(samples)
+        out = str(args.out)
+    payload = {
+        "ok": True,
+        "channel": args.channel,
+        "captured": len(samples),
+        "file": out,
+        "stats": stats,
+    }
+    human = "\n".join(
+        [
+            f"captured {len(samples)} samples on '{args.channel}' "
+            f"over {stats.get('duration_s', 0)}s" + (f" -> {out}" if out else ""),
+            f"  mean={stats.get('mean')} {args.units}  min={stats.get('min')}  "
+            f"max={stats.get('max')}  rate={stats.get('rate_hz')} Hz",
+        ]
+    )
+    _emit(args, payload, human)
+    return 0
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    samples = read_samples(args.file)
+    groups = list(iter_channels(samples))
+    payload = {
+        "ok": True,
+        "file": args.file,
+        "count": len(samples),
+        "channels": {ch: summarize(ss) for ch, ss in groups},
+    }
+    if args.json:
+        _emit(args, payload, "")
+    elif args.md:
+        lines = [
+            f"# Analysis — {args.file}",
+            "",
+            "| channel | n | mean | min | max | p95 | rate (Hz) | units |",
+            "|---|--:|--:|--:|--:|--:|--:|---|",
+        ]
+        for ch, ss in groups:
+            s = summarize(ss)
+            lines.append(
+                f"| {ch} | {s['count']} | {s['mean']:.6g} | {s['min']:.6g} "
+                f"| {s['max']:.6g} | {s['p95']:.6g} | {s['rate_hz']} | {s['units']} |"
+            )
+        print("\n".join(lines))
+    else:
+        lines = [f"{args.file}: {len(samples)} samples, {len(groups)} channel(s)"]
+        for ch, ss in groups:
+            s = summarize(ss)
+            extra = f"  energy={s['energy_wh']} Wh" if "energy_wh" in s else ""
+            lines.append(
+                f"  {ch}: n={s['count']} mean={s['mean']:.6g} min={s['min']:.6g} "
+                f"max={s['max']:.6g} p95={s['p95']:.6g} rate={s['rate_hz']}Hz {s['units']}{extra}"
+            )
+        _emit(args, {}, "\n".join(lines))
+    return 0
+
+
 _COMMANDS = {
     "probe": cmd_probe,
     "idn": cmd_idn,
@@ -596,6 +720,8 @@ _COMMANDS = {
     "devices": cmd_devices,
     "scrape": cmd_scrape,
     "bench": cmd_bench,
+    "log": cmd_log,
+    "analyze": cmd_analyze,
     "doctor": cmd_doctor,
 }
 

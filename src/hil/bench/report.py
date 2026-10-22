@@ -85,6 +85,7 @@ class RunReport:
     duration_s: float = 0.0
     steps: list[StepResult] = field(default_factory=list)
     measurements: list[Measurement] = field(default_factory=list)
+    captures: list[dict[str, Any]] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
         skipped = sum(1 for s in self.steps if s.skipped)
@@ -115,6 +116,8 @@ class RunReport:
             d["started_at"] = self.started_at
         if self.measurements:
             d["measurements"] = [m.to_dict() for m in self.measurements]
+        if self.captures:
+            d["captures"] = self.captures
         return d
 
     def human(self) -> str:
@@ -140,6 +143,12 @@ class RunReport:
                 lines.append(f"        {s.message}")
         if self.measurements:
             lines.append("  measurements: " + ", ".join(m.label() for m in self.measurements))
+        for c in self.captures:
+            lines.append(
+                f"  capture {c.get('channel', '')}: mean={c.get('mean')} {c.get('units', '')}"
+                f" (n={c.get('count', 0)}, {c.get('rate_hz', 0)} Hz)"
+                + (f" -> {c['file']}" if c.get("file") else "")
+            )
         return "\n".join(lines)
 
     def markdown(self) -> str:
@@ -166,4 +175,17 @@ class RunReport:
             )
         if self.measurements:
             out += ["", "**Measurements:** " + ", ".join(f"`{m.label()}`" for m in self.measurements)]
+        if self.captures:
+            out += [
+                "",
+                "**Captures:**",
+                "",
+                "| channel | n | mean | min | max | rate (Hz) | units |",
+                "|---|--:|--:|--:|--:|--:|---|",
+            ]
+            for c in self.captures:
+                out.append(
+                    f"| `{c.get('channel', '')}` | {c.get('count', 0)} | {c.get('mean')} "
+                    f"| {c.get('min')} | {c.get('max')} | {c.get('rate_hz', 0)} | {c.get('units', '')} |"
+                )
         return "\n".join(out)

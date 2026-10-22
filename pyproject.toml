@@ -14,6 +14,8 @@ dependencies = [
 serial = ["pyserial>=3.5"]
 visa = ["pyvisa>=1.14"]
 usb = ["python-usbtmc>=0.8", "pyusb>=1.2"]
+# PPK2 backend is GPLv2 and user-installed; HIL's MIT core only wraps it.
+ppk2 = ["ppk2-api>=0.9"]
 all = ["hil-harness[serial,visa,usb]"]
 dev = ["pytest>=8.0", "hil-harness[serial]"]
 

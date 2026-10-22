@@ -51,6 +51,8 @@ STEP_SPECS: dict[str, dict[str, Any]] = {
     "wait":    {"required": [], "optional": ["timeout"], "primary": None},
     "set":     {"required": ["var", "value"], "optional": [], "primary": None},
     "log":     {"required": ["message"], "optional": [], "primary": "message"},
+    "capture": {"required": ["channel", "seconds"],
+                "optional": ["interval", "units", "save_as", "out"], "primary": None},
 }
 STEP_TYPES = tuple(STEP_SPECS)
 
@@ -115,6 +117,9 @@ class Step:
             return f"errors (expect {a.get('expect', 'any')})"
         if self.type == "log":
             return f"log {a.get('message', '')}"
+        if self.type == "capture":
+            extra = f" -> {a['save_as']}" if a.get("save_as") else ""
+            return f"capture {a.get('channel', '')} for {a.get('seconds', 0)}s{extra}"
         return self.type
 
 
@@ -223,9 +228,9 @@ def _validate_step(step: Step) -> list[str]:
         expect = str(step.args.get("expect", "")).lower()
         if expect and expect not in ("none", "any"):
             errs.append(f"step {step.index} ('errors'): expect must be 'none' or 'any'")
-    if step.type == "delay":
+    if step.type in ("delay", "capture"):
         if not isinstance(step.args.get("seconds"), (int, float)):
-            errs.append(f"step {step.index} ('delay'): 'seconds' must be a number")
+            errs.append(f"step {step.index} ('{step.type}'): 'seconds' must be a number")
     return errs
 
 

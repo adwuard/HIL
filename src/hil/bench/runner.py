@@ -25,12 +25,13 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..errors import HilError
-from ..scpi import ScpiInstrument
+from ..instrument import Instrument
+from ..telemetry import DataLogger, summarize
 from .assertions import evaluate
 from .procedure import Procedure, Step
 from .report import Measurement, RunReport, StepResult
 
-InstrumentFactory = Callable[[], ScpiInstrument]
+InstrumentFactory = Callable[[], Instrument]
 StepHook = Callable[[StepResult], None]
 
 _VAR_RE = re.compile(r"\$\{(\w+)\}")
@@ -76,9 +77,10 @@ def _parse_value(response: str, parse: str) -> Any:
 def _execute(
     stype: str,
     args: dict[str, Any],
-    inst: ScpiInstrument,
+    inst: Instrument,
     variables: dict[str, Any],
     measurements: list[Measurement],
+    captures: list[dict[str, Any]],
     sr: StepResult,
 ) -> None:
     """Run one step, mutating ``sr`` / ``variables`` / ``measurements``."""
@@ -161,6 +163,26 @@ def _execute(
     elif stype == "log":
         sr.message = str(args.get("message", ""))
 
+    elif stype == "capture":
+        channel = str(args["channel"])
+        seconds = float(args["seconds"])
+        interval = args.get("interval")
+        units = str(args.get("units", ""))
+        samples = inst.capture(
+            channel, seconds, float(interval) if interval is not None else None, units
+        )
+        stats = summarize(samples, units)
+        out = args.get("out")
+        if out:
+            with DataLogger(out) as log:
+                log.writemany(samples)
+            stats["file"] = str(out)
+        captures.append(stats)
+        sr.value = stats
+        sr.response = f"{stats.get('count', 0)} samples, mean={stats.get('mean')}"
+        if args.get("save_as"):
+            variables[args["save_as"]] = stats.get("mean")
+
     else:  # pragma: no cover - validation rejects unknown types first
         sr.ok = False
         sr.message = f"unknown step type '{stype}'"
@@ -168,9 +190,10 @@ def _execute(
 
 def _run_step(
     step: Step,
-    inst: ScpiInstrument,
+    inst: Instrument,
     variables: dict[str, Any],
     measurements: list[Measurement],
+    captures: list[dict[str, Any]],
 ) -> StepResult:
     args = _substitute(step.args, variables)
     sr = StepResult(
@@ -181,7 +204,7 @@ def _run_step(
     )
     started = time.monotonic()
     try:
-        _execute(step.type, args, inst, variables, measurements, sr)
+        _execute(step.type, args, inst, variables, measurements, captures, sr)
     except HilError as exc:
         sr.ok = False
         sr.message = str(exc)
@@ -206,6 +229,7 @@ def run_procedure(
     coe = proc.continue_on_error if continue_on_error is None else continue_on_error
     variables = dict(proc.variables)
     measurements: list[Measurement] = []
+    captures: list[dict[str, Any]] = []
     results: list[StepResult] = []
     t0 = time.monotonic()
     report = RunReport(
@@ -245,7 +269,7 @@ def run_procedure(
                 sr = StepResult(index=s.index, type=s.type, summary=s.summary(),
                                 ok=False, skipped=True)
             else:
-                sr = _run_step(s, inst, variables, measurements)
+                sr = _run_step(s, inst, variables, measurements, captures)
                 if not sr.ok and not coe:
                     halted = True
             results.append(sr)
@@ -253,12 +277,13 @@ def run_procedure(
                 on_step(sr)
     finally:
         try:
-            inst.transport.close()
+            inst.close()
         except Exception:  # noqa: BLE001 - close must never mask a result
             pass
 
     report.steps = results
     report.measurements = measurements
+    report.captures = captures
     report.duration_s = time.monotonic() - t0
     report.ok = not any((not s.ok and not s.skipped) for s in results)
     return report

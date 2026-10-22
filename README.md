@@ -5,9 +5,9 @@
 ### Hardware-in-the-Loop testing for lab instruments
 
 **One safe, machine-readable interface to your bench.** Drive oscilloscopes,
-source-measure units, power supplies, waveform generators, DMMs and e-fuses from
-Python, the CLI, or an AI agent — over LAN, serial, or GPIB — with per-instrument
-safety enforced by default.
+source-measure units, power supplies, waveform generators, DMMs, e-fuses and even
+non-SCPI tools like power profilers from Python, the CLI, or an AI agent — over LAN,
+serial, or GPIB — with per-instrument safety enforced by default.
 
 ```bash
 pip install git+https://github.com/adwuard/HIL.git     # active development — not on PyPI yet
@@ -38,12 +38,14 @@ surfaced as clean JSON that a human *or* a model can drive.
 | Layer | Module | What it gives you |
 |---|---|---|
 | **Transport** | `hil.transports` | One byte-pipe to the instrument: raw **TCP** socket (stdlib, always on), **RS-232 serial**, and **VISA** (GPIB / USB / Ethernet). Optional backends install as extras, so the base stays light. |
-| **Instrument** | `hil.scpi` | `ScpiInstrument` — `write` / `query` / `execute`, the IEEE-488.2 commons (`*IDN?`, `*OPC?`, `*RST`), error-queue draining, and `safe_execute` that returns a structured result instead of raising. |
-| **Knowledge** | `hil.registry` | Declarative **YAML device profiles**: capabilities, command sets, connection examples, and a **safety policy** (block / allow / limits). Drop in your own dirs to extend it. |
-| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
+| **Instrument** | `hil.instrument` | One `Instrument` interface — `write` / `query` / `execute`, the IEEE-488.2 commons, error-queue draining, `safe_execute`, and `capture()` for time-stamped sampling. `hil.scpi.ScpiInstrument` is the default implementation; non-SCPI devices plug in as drivers. |
+| **Drivers** | `hil.drivers` | A pluggable registry that maps a device to its instrument implementation. Built-ins: `scpi` and `ppk2` (Nordic Power Profiler Kit II). Third parties register their own via the `hil.drivers` entry-point group — no fork required. |
+| **Knowledge** | `hil.registry` | Declarative **YAML device profiles**: capabilities, command sets, connection examples, a `driver:` field, and a **safety policy** (block / allow / limits). Drop in your own dirs to extend it. |
+| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
+| **Telemetry** | `hil.telemetry` | Long-run **data logging + analytics**: append-only `Sample` records (timestamp, channel, value, units) to NDJSON/CSV, and `summarize()` for count, rate, mean/min/max/std, percentiles and energy (∫P·dt). Stdlib only. |
 | **Errors** | `hil.errors` | A typed hierarchy where every message is *agent-actionable*: what failed, why, and the next step. |
-| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + reports. Safety-first, and it runs with **zero hardware**. |
-| **Interface** | `hil.cli` | An agent-first CLI — every command emits stable `--json` with meaningful exit codes. |
+| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + a `capture` step + reports. Safety-first, and it runs with **zero hardware**. |
+| **Interface** | `hil.cli` | An agent-first CLI — every command emits stable `--json` with meaningful exit codes, including `hil log` and `hil analyze`. |
 
 ## Built to be driven by AI
 
@@ -136,20 +138,130 @@ PASS  SMU output accuracy  [sim: simulator]  device=keithley-2400
   measurements: vout=3.301 V, iout=0.052 A
 ```
 
+## Beyond SCPI — third-party & custom instruments
+
+Not everything on a bench speaks SCPI. Power profilers, on-chip debuggers, logic
+analyzers and home-built USB/CDC power supplies use their own binary protocols and
+vendor libraries. HIL keeps them all behind the **same `Instrument` interface**, so
+the safety policy, bench, simulator, CLI and reports work unchanged.
+
+A device profile selects its implementation with a `driver:` field (default `scpi`):
+
+```yaml
+slug: nordic-ppk2
+driver: ppk2                     # routes connect() to hil.drivers.ppk2
+connection_examples:
+  - ppk2:///dev/cu.usbmodem01    # macOS · Linux /dev/ttyACM0 · Windows COM3
+```
+
+```python
+from hil import connect
+ppk2 = connect("ppk2:///dev/cu.usbmodem01", device_slug="nordic-ppk2")
+ppk2.write(":SOUR:VOLT 3300")    # pseudo-SCPI facade -> native ppk2-api calls
+samples = ppk2.capture(":MEAS:CURR?", seconds=5, units="A")
+```
+
+The bundled **PPK2** driver wraps Nordic's open-source
+[`ppk2-api`](https://github.com/IRNAS/ppk2-api-python) behind a small pseudo-SCPI
+facade (`:SOUR:VOLT`, `:OUTP`, `:CONF:MODE`, `:INIT:ACQ`, `:MEAS:CURR?`,
+`:MEAS:POWer?`, plus the **8 digital I/O channels** via `:DIG<n>:DIR IN|OUT`,
+`:DIG<n> ON|OFF`, `:DIG<n>?`, `:DIG:PORT <0..255>`, `:DIG:PORT?`). Because
+`ppk2-api` is **GPLv2** and HIL is **MIT**, the backend is an *optional,
+user-installed* extra — never vendored into the core:
+
+```bash
+pip install 'hil-harness[ppk2]'   # pulls in ppk2-api; the ppk2 driver activates
+```
+
+> The digital channels are optional on the backend: `ppk2-api` doesn't drive them
+> yet, so the facade raises a clear, actionable error — and they light up
+> automatically for any injected backend that implements `read_digital` /
+> `write_digital` / `set_digital_direction`. `capture("digital")` streams the
+> 8-bit port word so you can correlate current spikes with logic edges.
+
+### Bring your own driver (OCD, logic analyzer, CDC power supply)
+
+A driver is a factory `(address, device, timeout) -> Instrument`. Register it from
+your own package via the `hil.drivers` entry-point group — HIL picks it up without a
+fork or an edit:
+
+```toml
+# your package's pyproject.toml
+[project.entry-points."hil.drivers"]
+myocd = "my_pkg.hil_driver:ocd_driver"
+```
+
+```python
+# my_pkg/hil_driver.py
+from hil.instrument import BaseInstrument
+
+class OcdInstrument(BaseInstrument):
+    def __init__(self, addr, device=None, timeout=5.0):
+        super().__init__(device)
+        # open pyOCD / OpenOCD here
+    def idn(self) -> str: ...
+    def write(self, command) -> None: ...      # map pseudo-commands to your API
+    def query(self, command, timeout=None) -> str: ...
+    # BaseInstrument supplies execute/safe_execute/reset/opc/close and a
+    # poll-based capture(); override capture() to stream native samples.
+
+def ocd_driver(addr, device, timeout=5.0):
+    return OcdInstrument(addr, device=device, timeout=timeout)
+```
+
+Then give the device a profile with `driver: myocd` and an address scheme, and it
+inherits safety checks, bench steps, the simulator and `--json` reporting for free.
+
+## Data logging & analytics
+
+Every `Instrument` can `capture(channel, seconds, interval, units)` and return
+time-stamped `Sample` records — raw value plus timestamp plus channel, so nothing is
+lost. Persist them and analyse later with the `hil.telemetry` module or the CLI.
+
+```bash
+# Log a channel to disk (append-only NDJSON; .csv also supported). --sim to rehearse.
+hil log keithley-2400 --channel ":MEAS:CURR?" --seconds 300 --interval 0.5 \
+        --units A --out run.ndjson
+
+# Summarise any capture file: count, rate, mean/min/max/std, p50/p95/p99,
+# and energy (Wh) for watt channels.
+hil analyze run.ndjson --json
+```
+
+Inside a bench procedure, the `capture` step records stats into the report and can
+feed an assertion or write a sidecar file:
+
+```yaml
+steps:
+  - capture: {channel: ":MEAS:CURR?", seconds: 10, interval: 0.2, units: A, save_as: iavg}
+  - assert:  {that: iavg, op: within, value: "0.040..0.060", message: "average draw in budget"}
+```
+
+`summarize()` is stdlib-only and computes energy by trapezoidal integration of power
+channels (∫P·dt), so long soak runs yield both raw data and headline numbers.
+
 ## Knowledge base
 
 HIL ships with a **reference library of 725 instruments across 7 vendors** — roughly
 **294,000 SCPI commands** (83k queries · 211k setters) spanning 17 categories:
 oscilloscopes, SMUs, power sources, meters, RF, DAQ, electronic loads and e-fuses.
-Four profiles are hand-curated with safety policies and load by default; the full
+Five profiles are hand-curated with safety policies and load by default; the full
 corpus is a versioned dataset under `data/` that you can add to the registry.
 
 ### Every instrument, by brand and type
 
-Model numbers only — grouped by manufacturer, then instrument type. The four
-hand-curated profiles (`keithley-2400`, `rigol-dho1072`, `keysight-ac6801b`,
-`ea-el9000b`) load by default with safety policies; the rest live in the
-versioned dataset under `data/`.
+Model numbers only — grouped by manufacturer, then instrument type. The five
+hand-curated profiles load by default with safety policies:
+
+| Slug | Instrument | Type | Driver |
+|---|---|---|---|
+| `keithley-2400` | Keithley 2400 | SourceMeter (SMU) | `scpi` |
+| `rigol-dho1072` | Rigol DHO1072 | Oscilloscope | `scpi` |
+| `keysight-ac6801b` | Keysight AC6801B | AC power source | `scpi` |
+| `ea-el9000b` | EA EL9000B | DC power supply | `scpi` |
+| `nordic-ppk2` | Nordic Power Profiler Kit II | Power profiler (non-SCPI) | `ppk2` |
+
+The rest of the corpus lives in the versioned dataset under `data/`.
 
 #### Keysight (279)
 
@@ -477,11 +589,12 @@ git clone https://github.com/adwuard/HIL.git && cd HIL
 pip install -e '.[dev]'                                  # editable + test deps
 ```
 
-Extras: `.[serial]` (RS-232), `.[visa]` (GPIB / VISA / USB), `.[all]`, `.[dev]`.
-Python 3.10+. Core requires only PyYAML.
+Extras: `.[serial]` (RS-232), `.[visa]` (GPIB / VISA / USB), `.[ppk2]` (Nordic PPK2
+backend, GPLv2), `.[all]`, `.[dev]`. Python 3.10+. Core requires only PyYAML.
 
 ## Status
 
-**v0.1.0** — transports, SCPI layer, registry, bench and CLI are live and tested.
-The MCP server and a PyPI release as `hil-harness` are next.
+**v0.1.0** — transports, SCPI layer, a pluggable instrument/driver registry (with a
+non-SCPI PPK2 driver), telemetry (logging + analytics), bench, and CLI are live and
+tested. The MCP server and a PyPI release as `hil-harness` are next.
 MIT licensed.

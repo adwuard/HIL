@@ -12,6 +12,7 @@ import time
 from typing import TYPE_CHECKING
 
 from .errors import InstrumentError, TimeoutError_
+from .instrument import BaseInstrument
 
 if TYPE_CHECKING:  # pragma: no cover
     from .registry.schema import Device
@@ -20,7 +21,7 @@ if TYPE_CHECKING:  # pragma: no cover
 MAX_QUEUE_READS = 50  # instruments can queue many errors; never loop forever
 
 
-class ScpiInstrument:
+class ScpiInstrument(BaseInstrument):
     """A SCPI-speaking instrument behind a transport."""
 
     def __init__(
@@ -29,6 +30,7 @@ class ScpiInstrument:
         device: "Device | None" = None,
         timeout: float = 5.0,
     ) -> None:
+        super().__init__(device)
         self.transport = transport
         self.device = device
         self.timeout = timeout
@@ -145,3 +147,7 @@ class ScpiInstrument:
             result["ok"] = False
         result["elapsed_s"] = round(time.monotonic() - started, 3)
         return result
+
+    def close(self) -> None:
+        """Close the underlying transport."""
+        self.transport.close()

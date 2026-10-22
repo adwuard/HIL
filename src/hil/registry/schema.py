@@ -70,6 +70,7 @@ class Device:
     manufacturer: str
     model: str
     category: str = ""
+    driver: str = "scpi"  # instrument driver: 'scpi' (default) or e.g. 'ppk2'
     series: str = ""  # product family, e.g. 'DHO1000/DHO4000 Series' (scraped)
     description: str = ""
     manual: str = ""  # source programming guide, e.g. 'DHO Series Programming Guide'

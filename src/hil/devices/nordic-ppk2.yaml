@@ -1,0 +1,71 @@
+slug: nordic-ppk2
+manufacturer: Nordic Semiconductor
+model: PPK2
+category: power-profiler
+driver: ppk2                    # non-SCPI: routed to hil.drivers.ppk2
+description: >
+  Power Profiler Kit II — measures (and optionally sources) current from 200 nA
+  to 1 A at 100 kSps over USB-CDC serial. Not SCPI: HIL drives it through a
+  small pseudo-SCPI facade so it reuses the safety policy, bench and CLI.
+interfaces: [usb-cdc-serial]
+connection_examples:
+  - ppk2:///dev/cu.usbmodem01     # macOS
+  - ppk2:///dev/ttyACM0           # Linux
+  - ppk2://COM3                   # Windows
+capabilities:
+  - measure-dc-current
+  - measure-power
+  - source-dc-voltage
+  - digital-io-8ch
+safety:
+  # Source mode is 0.8..5 V @ 1 A; keep the DUT inside that envelope.
+  limits:
+    voltage: 0.8..5 V
+    current: 0..1 A
+commands:
+  - name: set-source-voltage
+    syntax: ':SOUR:VOLT <mv>'
+    description: Set the source-meter output voltage in millivolts (800..5000).
+    subsystem: SOURce
+    parameters: '<mv> in millivolts, 800..5000'
+  - name: read-source-voltage
+    syntax: ':SOUR:VOLT?'
+    query: true
+  - name: set-output
+    syntax: ':OUTP <state>'
+    description: Enable (ON) or disable (OFF) DUT power in source-meter mode.
+  - name: set-mode
+    syntax: ':CONF:MODE <mode>'
+    description: Select SOURce-meter or AMP-meter mode.
+    parameters: '<mode> = SOUR | AMP'
+  - name: start-acquisition
+    syntax: ':INIT:ACQ'
+    description: Begin sampling; the native stream powers the `capture` step.
+  - name: stop-acquisition
+    syntax: ':MEAS:STOP'
+  - name: measure-current
+    syntax: ':MEAS:CURR?'
+    query: true
+    description: Mean current over a short window, in amperes.
+  - name: measure-power
+    syntax: ':MEAS:POWer?'
+    query: true
+    description: Mean power (V x I) over a short window, in watts.
+  - name: digital-direction
+    syntax: ':DIG<n>:DIR <dir>'
+    description: Set a digital channel (n = 0..7) as an input (IN) or output (OUT).
+    parameters: '<dir> = IN | OUT'
+  - name: digital-write
+    syntax: ':DIG<n> <state>'
+    description: Drive a digital output channel high (ON/1) or low (OFF/0).
+  - name: digital-read
+    syntax: ':DIG<n>?'
+    query: true
+    description: Read one digital channel (n = 0..7) as 0 or 1.
+  - name: digital-port
+    syntax: ':DIG:PORT <value>'
+    description: Write all 8 digital channels at once (0..255).
+  - name: digital-port-read
+    syntax: ':DIG:PORT?'
+    query: true
+    description: Read all 8 digital channels as one 8-bit word (0..255).
