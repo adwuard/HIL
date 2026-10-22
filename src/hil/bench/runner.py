@@ -28,7 +28,7 @@ from ..errors import HilError
 from ..instrument import Instrument
 from ..telemetry import DataLogger, summarize
 from .assertions import evaluate
-from .procedure import Procedure, Step
+from .procedure import Procedure, Step, _normalize_step
 from .report import Measurement, RunReport, StepResult
 
 InstrumentFactory = Callable[[], Instrument]
@@ -82,6 +82,9 @@ def _execute(
     measurements: list[Measurement],
     captures: list[dict[str, Any]],
     sr: StepResult,
+    *,
+    coe: bool = False,
+    on_step: StepHook | None = None,
 ) -> None:
     """Run one step, mutating ``sr`` / ``variables`` / ``measurements``."""
     if stype == "reset":
@@ -183,9 +186,69 @@ def _execute(
         if args.get("save_as"):
             variables[args["save_as"]] = stats.get("mean")
 
+    elif stype == "repeat":
+        _run_repeat(args, inst, variables, measurements, captures, sr,
+                    coe=coe, on_step=on_step)
+
     else:  # pragma: no cover - validation rejects unknown types first
         sr.ok = False
         sr.message = f"unknown step type '{stype}'"
+
+
+def _run_repeat(
+    args: dict[str, Any],
+    inst: Instrument,
+    variables: dict[str, Any],
+    measurements: list[Measurement],
+    captures: list[dict[str, Any]],
+    sr: StepResult,
+    *,
+    coe: bool = False,
+    on_step: StepHook | None = None,
+) -> None:
+    """Run a nested ``steps`` body ``count`` times.
+
+    Nested steps stream through ``on_step`` for live progress but are *not*
+    appended to the top-level report (which would balloon for an hour-long
+    soak); their measurements/captures still accumulate, and the ``repeat``
+    step records a compact summary. A nested failure stops the loop unless
+    ``continue_on_error`` is set.
+    """
+    try:
+        count = int(str(args.get("count", 0)).strip())
+    except (TypeError, ValueError):
+        raise HilError(f"repeat: 'count' must be an integer, got {args.get('count')!r}")
+    body: list[Step] = []
+    for j, raw in enumerate(args.get("steps") or [], 1):
+        st, _err = _normalize_step(raw, j)
+        if st is not None:
+            body.append(st)
+
+    cycles = 0
+    failures = 0
+    last_msg = ""
+    for _ in range(max(0, count)):
+        cycle_failed = False
+        for st in body:
+            sub = _run_step(st, inst, variables, measurements, captures,
+                            coe=coe, on_step=on_step)
+            if on_step is not None:
+                on_step(sub)
+            if not sub.ok:
+                failures += 1
+                last_msg = sub.message or ""
+                cycle_failed = True
+                if not coe:
+                    break
+        cycles += 1
+        if cycle_failed and not coe:
+            break
+
+    sr.value = {"count": max(0, count), "cycles": cycles, "failures": failures}
+    sr.response = f"{cycles}/{max(0, count)} cycles, {failures} step failures"
+    if failures:
+        sr.ok = False
+        sr.message = last_msg or "a step inside repeat failed"
 
 
 def _run_step(
@@ -194,6 +257,9 @@ def _run_step(
     variables: dict[str, Any],
     measurements: list[Measurement],
     captures: list[dict[str, Any]],
+    *,
+    coe: bool = False,
+    on_step: StepHook | None = None,
 ) -> StepResult:
     args = _substitute(step.args, variables)
     sr = StepResult(
@@ -204,7 +270,8 @@ def _run_step(
     )
     started = time.monotonic()
     try:
-        _execute(step.type, args, inst, variables, measurements, captures, sr)
+        _execute(step.type, args, inst, variables, measurements, captures, sr,
+                 coe=coe, on_step=on_step)
     except HilError as exc:
         sr.ok = False
         sr.message = str(exc)
@@ -269,7 +336,8 @@ def run_procedure(
                 sr = StepResult(index=s.index, type=s.type, summary=s.summary(),
                                 ok=False, skipped=True)
             else:
-                sr = _run_step(s, inst, variables, measurements, captures)
+                sr = _run_step(s, inst, variables, measurements, captures,
+                               coe=coe, on_step=on_step)
                 if not sr.ok and not coe:
                     halted = True
             results.append(sr)

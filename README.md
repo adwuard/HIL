@@ -44,7 +44,7 @@ surfaced as clean JSON that a human *or* a model can drive.
 | **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
 | **Telemetry** | `hil.telemetry` | Long-run **data logging + analytics**: append-only `Sample` records (timestamp, channel, value, units) to NDJSON/CSV, and `summarize()` for count, rate, mean/min/max/std, percentiles and energy (∫P·dt). Stdlib only. |
 | **Errors** | `hil.errors` | A typed hierarchy where every message is *agent-actionable*: what failed, why, and the next step. |
-| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + a `capture` step + reports. Safety-first, and it runs with **zero hardware**. |
+| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + `capture` and `repeat` (loop) steps + reports. Safety-first, and it runs with **zero hardware**. |
 | **Interface** | `hil.cli` | An agent-first CLI — every command emits stable `--json` with meaningful exit codes, including `hil log` and `hil analyze`. |
 
 ## Built to be driven by AI
@@ -241,6 +241,32 @@ steps:
 
 `summarize()` is stdlib-only and computes energy by trapezoidal integration of power
 channels (∫P·dt), so long soak runs yield both raw data and headline numbers.
+
+### Long-running soaks with `repeat`
+
+The `repeat` step loops a body of steps — so a procedure can toggle, sample and log
+for hours without unrolling thousands of steps. `count` and any `seconds` accept
+`${variables}`, so the same file runs a real soak on hardware and a scaled dry-run on
+the simulator. Nested steps stream live progress; the report keeps a compact per-loop
+summary while every `capture` still appends to its log file.
+
+```yaml
+variables: {period_s: 3, cycles: 600}          # 600 x (3 s on + 3 s off) = 1 hour
+steps:
+  - repeat:
+      count: ${cycles}
+      steps:
+        - write: ":OUTP ON"
+        - capture: {channel: ":MEAS:CURR?", seconds: ${period_s}, interval: 0.5, units: A, out: logs/on.ndjson}
+        - write: ":OUTP OFF"
+        - capture: {channel: ":MEAS:CURR?", seconds: ${period_s}, interval: 0.5, units: A, out: logs/off.ndjson}
+```
+
+See `examples/bench/ppk2-battery-soak.yaml` for a full hour-long PPK2 soak: it
+toggles the source every 3 s, averages current, logs the source-voltage setpoint,
+and reads a battery/charge flag off digital input **D0** (the PPK2's digital channels
+are inputs only — wire the DUT's own output pin or a comparator into D0). Mark such
+files `long_running: true` to keep them out of the fast bundled-example CI run.
 
 ## Knowledge base
 

@@ -25,6 +25,7 @@ step.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -33,6 +34,29 @@ import yaml
 
 from ..errors import ProcedureError
 from .assertions import OPS
+
+# A ``${name}`` variable reference (whole-string), allowed wherever a number is
+# expected so durations/counts can be driven from procedure variables.
+_VAR_REF = re.compile(r"^\s*\$\{\w+\}\s*$")
+
+
+def _numeric_or_var(value: Any) -> bool:
+    """True for real numbers, numeric strings, or a whole ``${var}`` reference."""
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        s = value.strip()
+        if _VAR_REF.match(s):
+            return True
+        try:
+            float(s)
+            return True
+        except ValueError:
+            return False
+    return False
+
 
 # step type -> required args, optional args, and the shorthand "primary" arg
 # used when a step is written as ``{type: scalar}`` instead of ``{type: {...}}``.
@@ -53,6 +77,7 @@ STEP_SPECS: dict[str, dict[str, Any]] = {
     "log":     {"required": ["message"], "optional": [], "primary": "message"},
     "capture": {"required": ["channel", "seconds"],
                 "optional": ["interval", "units", "save_as", "out"], "primary": None},
+    "repeat":  {"required": ["count", "steps"], "optional": [], "primary": None},
 }
 STEP_TYPES = tuple(STEP_SPECS)
 
@@ -120,6 +145,10 @@ class Step:
         if self.type == "capture":
             extra = f" -> {a['save_as']}" if a.get("save_as") else ""
             return f"capture {a.get('channel', '')} for {a.get('seconds', 0)}s{extra}"
+        if self.type == "repeat":
+            body = a.get("steps") or []
+            n = len(body) if isinstance(body, list) else 0
+            return f"repeat {a.get('count', 0)}x ({n} steps)"
         return self.type
 
 
@@ -145,6 +174,7 @@ class Procedure:
     variables: dict[str, Any] = field(default_factory=dict)
     sim: Sim = field(default_factory=Sim)
     continue_on_error: bool = False
+    long_running: bool = False  # soak/loop procedure: excluded from fast sim tests
     source: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -155,6 +185,7 @@ class Procedure:
             "address": self.address,
             "variables": self.variables,
             "continue_on_error": self.continue_on_error,
+            "long_running": self.long_running,
             "steps": [{"type": s.type, "index": s.index, **s.args} for s in self.steps],
         }
 
@@ -229,8 +260,27 @@ def _validate_step(step: Step) -> list[str]:
         if expect and expect not in ("none", "any"):
             errs.append(f"step {step.index} ('errors'): expect must be 'none' or 'any'")
     if step.type in ("delay", "capture"):
-        if not isinstance(step.args.get("seconds"), (int, float)):
+        if not _numeric_or_var(step.args.get("seconds")):
             errs.append(f"step {step.index} ('{step.type}'): 'seconds' must be a number")
+    if step.type == "repeat":
+        count = step.args.get("count")
+        if isinstance(count, bool) or not _numeric_or_var(count):
+            errs.append(
+                f"step {step.index} ('repeat'): 'count' must be an integer or ${{var}}"
+            )
+        elif isinstance(count, int) and count < 0:
+            errs.append(f"step {step.index} ('repeat'): 'count' must be >= 0")
+        body = step.args.get("steps")
+        if not isinstance(body, list) or not body:
+            errs.append(f"step {step.index} ('repeat'): 'steps' must be a non-empty list")
+        else:
+            for j, raw in enumerate(body, 1):
+                sub, err = _normalize_step(raw, j)
+                if err:
+                    errs.append(f"step {step.index} ('repeat') -> {err}")
+                elif sub is not None:
+                    for e in _validate_step(sub):
+                        errs.append(f"step {step.index} ('repeat') -> {e}")
     return errs
 
 
@@ -307,6 +357,7 @@ def parse_procedure(data: Any, *, source: str = "") -> Procedure:
         variables=dict(meta.get("variables", {}) or {}),
         sim=sim,
         continue_on_error=bool(meta.get("continue_on_error", False)),
+        long_running=bool(meta.get("long_running", False)),
         source=source,
     )
 

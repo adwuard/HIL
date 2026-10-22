@@ -365,5 +365,7 @@ def test_bundled_examples_are_valid():
 def test_bundled_examples_pass_on_simulator():
     for path in sorted(EXAMPLES.glob("*.yaml")):
         proc = load_procedure(path)
+        if proc.long_running:
+            continue  # soak/loop examples run scaled in their own test
         report = _run(proc, device_slug=proc.device)
         assert report.ok is True, f"{path.name} failed: {report.human()}"

@@ -11,6 +11,10 @@ build/
 scraped/
 .cache/
 
+# telemetry captured by bench/`hil log` runs (e.g. the PPK2 soak example)
+logs/
+*.ndjson
+
 # NOTE: data/ holds *versioned* corpus snapshots (tar.gz + index) and IS tracked.
 # Only the working scraped/ tree above is ignored.
 

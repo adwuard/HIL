@@ -1,0 +1,79 @@
+# PPK2 battery soak — run:  hil bench run examples/bench/ppk2-battery-soak.yaml
+#
+# Drives a Nordic PPK2 in SOURCE mode for ~1 hour, toggling DUT power every 3 s,
+# while logging current (I), the source voltage setpoint (V) and a battery/charge
+# flag. Add `--address ppk2:///dev/cu.usbmodem01` to run on real hardware
+# (install the backend first:  pip install 'hil-harness[ppk2]').
+#
+# Wiring / what the PPK2 can and cannot do:
+#   * The PPK2 measures CURRENT; it does not measure voltage. "V" here is the
+#     source setpoint (:SOUR:VOLT?, in millivolts) — power is V x I.
+#   * The PPK2's 8 digital channels are INPUTS ONLY (no GPO). To "see" the
+#     battery, wire the DUT's own output pin (or a comparator on the battery)
+#     into PPK2 D0; we read it as a 1-bit battery/charge flag via :DIG:PORT?
+#     (bit 0 = D0). A real voltage reading needs a separate DMM/SMU.
+#   * Reading the digital channels needs a backend that exposes read_digital();
+#     upstream ppk2-api does not yet, so on real hardware the battery-flag
+#     capture raises a clear error until such a backend is installed. It works
+#     on the simulator, which is how CI validates this file.
+#
+# Timing: each cycle = ON for period_s, then OFF for period_s (a toggle every
+# period_s). cycles x 2 x period_s = total, so 600 x 2 x 3 s = 3600 s = 1 hour.
+# The battery flag is sampled once per cycle (flag_s), so the real total is a
+# few minutes over an hour. Shrink the variables below for a quick dry-run.
+name: PPK2 battery soak
+description: >
+  Toggle a PPK2-sourced DUT every 3 s for an hour, logging averaged current, the
+  source voltage setpoint, and a battery/charge flag read on digital input D0.
+device: nordic-ppk2
+long_running: true               # excluded from the fast bundled-example sim test
+variables:
+  vset_mv: 3300                  # PPK2 source voltage (millivolts)
+  period_s: 3                    # toggle the source state every 3 s
+  sample_s: 0.5                  # current-capture poll interval
+  flag_s: 0.1                    # battery-flag sample window per cycle
+  cycles: 600                    # 600 x (3 s on + 3 s off) = 1 hour
+  log_dir: logs/ppk2-battery-soak
+sim:
+  idn: "Nordic,PPK2,SIM,ppk2-api"
+  responses:
+    ":SOUR:VOLT?": "3300"
+    ":MEAS:CURR?": "0.048"
+    ":DIG:PORT?": "1"            # bit 0 (D0) high -> battery/charge flag set
+steps:
+  - log: "PPK2 battery soak: ${cycles} cycles, toggling every ${period_s}s"
+  - write: ":CONF:MODE SOUR"
+  - write: ":SOUR:VOLT ${vset_mv}"
+  - measure: {command: ":SOUR:VOLT?", save_as: vsrc, units: mV}   # setpoint, logged once
+  - write: ":INIT:ACQ"
+  - repeat:
+      count: ${cycles}
+      steps:
+        - write: ":OUTP ON"
+        - capture:
+            channel: ":MEAS:CURR?"
+            seconds: ${period_s}
+            interval: ${sample_s}
+            units: A
+            save_as: i_on
+            out: ${log_dir}/current-on.ndjson
+        - capture:                     # battery/charge flag on digital input D0
+            channel: ":DIG:PORT?"
+            seconds: ${flag_s}
+            interval: ${flag_s}
+            units: flag
+            save_as: batt_flag
+            out: ${log_dir}/battery-flag.ndjson
+        - write: ":OUTP OFF"
+        - capture:
+            channel: ":MEAS:CURR?"
+            seconds: ${period_s}
+            interval: ${sample_s}
+            units: A
+            save_as: i_off
+            out: ${log_dir}/current-off.ndjson
+  - write: ":MEAS:STOP"
+  - write: ":OUTP OFF"
+  # i_on / i_off hold the last cycle's averages; check the DUT stayed in budget.
+  - assert: {that: i_on, op: lt, value: 1.0, message: "ON current under the 1 A limit"}
+  - log: "soak complete — analyze with:  hil analyze ${log_dir}/current-on.ndjson"
