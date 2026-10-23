@@ -8,6 +8,7 @@
     hil log <addr> --channel :MEAS:CURR? --seconds 30 --out run.ndjson
     hil analyze run.ndjson                    # summarize a capture
     hil doctor                                # env + backend availability
+    hil setup [target] [--dry-run|--yes]      # fetch/build device backends on demand
 """
 
 from __future__ import annotations
@@ -77,6 +78,22 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_telemetry_parsers(sub, sub_common)
 
     sub.add_parser("doctor", help="environment and backend availability", parents=[sub_common])
+
+    p = sub.add_parser(
+        "setup",
+        help="download/build optional third-party device backends on demand",
+        parents=[sub_common],
+    )
+    p.add_argument(
+        "targets", nargs="*",
+        help="device slug / driver / recipe slug, or 'all' (default: status of every recipe)",
+    )
+    p.add_argument("--list", action="store_true", help="list provisioning recipes and exit")
+    p.add_argument("--check", action="store_true", help="only report status; change nothing")
+    p.add_argument("--dry-run", action="store_true",
+                   help="print the exact commands without running them")
+    p.add_argument("--yes", action="store_true",
+                   help="allow privileged steps (sudo/brew/apt native installs)")
     return parser
 
 
@@ -595,13 +612,22 @@ def cmd_bench(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     import platform
 
+    from . import provision
+
     devices = load_registry()
+    prov = provision.status(platform=provision.detect())
     payload = {
         "hil_version": __version__,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "backends": backend_status(),
         "registry_devices": len(devices),
+        "provisioning": [
+            {"slug": r.recipe.slug, "ready": r.satisfied,
+             "license": r.recipe.license,
+             "hint": "" if r.satisfied else provision.setup_hint(r.recipe.slug)}
+            for r in prov
+        ],
     }
     if args.json:
         _emit(args, payload, "")
@@ -610,6 +636,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             f"{name}: {'ok' if ok else 'MISSING'}"
             for name, ok in payload["backends"].items()
         )
+        prov_str = "  ".join(
+            f"{p['slug']}: {'ready' if p['ready'] else p['hint']}"
+            for p in payload["provisioning"]
+        ) or "(none)"
         _emit(
             args,
             {},
@@ -618,11 +648,72 @@ def cmd_doctor(args: argparse.Namespace) -> int:
                     f"hil {__version__} on Python {payload['python']} ({payload['platform']})",
                     f"backends: {backends}",
                     f"registry: {payload['registry_devices']} devices",
+                    f"optional device backends: {prov_str}",
                     "missing backend? pip install 'hil-harness[serial]' / 'hil-harness[visa]' / 'hil-harness[all]'",
+                    "missing device backend? run the hinted 'hil setup <slug>' (or 'hil setup --list')",
                 ]
             ),
         )
     return 0
+
+
+def cmd_setup(args: argparse.Namespace) -> int:
+    """`hil setup [targets...]` — check / download / build device backends."""
+    from . import provision
+
+    platform = provision.detect()
+
+    if args.list:
+        recipes = provision.load_recipes()
+        rows = [r.to_dict() for r in recipes.values()]
+        if args.json:
+            _emit(args, rows, "")
+        else:
+            lines = ["provisioning recipes (third-party device backends):"]
+            for slug, r in sorted(recipes.items()):
+                lines.append(f"  {slug}  [{r.license or 'n/a'}]  driver={r.driver or '-'}")
+                if r.description:
+                    lines.append(f"      {r.description.strip()}")
+            lines.append("run: hil setup <slug> [--dry-run|--yes]   |   hil setup <device-slug>")
+            _emit(args, {}, "\n".join(lines))
+        return 0
+
+    targets = list(args.targets or [])
+
+    # No targets, or --check: report status only (never changes anything).
+    if args.check or not targets:
+        reports = provision.status(targets or None, platform=platform)
+        if args.json:
+            _emit(args, [r.to_dict() for r in reports], "")
+        else:
+            lines = [f"host: {platform.describe()}"]
+            for r in reports:
+                mark = "ready" if r.satisfied else "NOT provisioned"
+                lines.append(f"  {r.recipe.slug}: {mark}")
+                for d in r.detect:
+                    lines.append(f"      [{'ok' if d.ok else ' missing'}] {d.probe.label()}"
+                                 + (f" — {d.detail}" if d.detail and not d.ok else ""))
+                if not r.satisfied:
+                    lines.append(f"      -> {provision.setup_hint(r.recipe.slug)}")
+            _emit(args, {}, "\n".join(lines))
+        return 0 if all(r.satisfied for r in reports) else 1
+
+    # Provision the resolved targets.
+    reports = provision.provision(
+        targets,
+        dry_run=args.dry_run,
+        assume_yes=args.yes,
+        platform=platform,
+        on_output=(lambda _line: None) if args.json else print,
+    )
+    if args.json:
+        _emit(args, [r.to_dict() for r in reports], "")
+    else:
+        for r in reports:
+            print(r.human())
+            if r.recipe.notes and not r.satisfied:
+                print(f"  notes: {r.recipe.notes.strip()}")
+    return 0 if all(r.ok for r in reports) else 1
 
 
 def _log_instrument(args: argparse.Namespace):
@@ -723,6 +814,7 @@ _COMMANDS = {
     "log": cmd_log,
     "analyze": cmd_analyze,
     "doctor": cmd_doctor,
+    "setup": cmd_setup,
 }
 
 

@@ -119,6 +119,26 @@ def build_instrument_factory(
 
         device = load_registry(registry_dirs).get(device_slug)
 
+    # A logic-analyzer procedure simulates on a synthetic capture backend (which
+    # writes small artifacts to a throwaway spool) instead of the SCPI simulator.
+    driver = getattr(device, "driver", "scpi") or "scpi"
+    wants_logic = driver == "logic" or any(
+        getattr(s, "type", "") in ("logic", "decode") for s in proc.steps
+    )
+    if wants_logic:
+        import tempfile
+
+        from ..artifacts import ArtifactSpool
+        from ..drivers.logic import LogicInstrument, LogicSimBackend
+
+        def logic_factory():
+            spool = ArtifactSpool(tempfile.mkdtemp(prefix="hil-logic-sim-"))
+            return LogicInstrument(
+                LogicSimBackend(spool=spool), device=device, timeout=timeout
+            )
+
+        return logic_factory
+
     def factory() -> ScpiInstrument:
         transport = SimTransport(
             responses=proc.sim.responses,

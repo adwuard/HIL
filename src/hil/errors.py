@@ -57,5 +57,9 @@ class BenchError(HilError):
     """A test-bench procedure failed to load, validate, or run."""
 
 
+class ProvisionError(HilError):
+    """A third-party backend could not be checked, downloaded, or built."""
+
+
 class ProcedureError(BenchError):
     """A bench procedure spec is malformed or invalid (bad step, missing arg)."""

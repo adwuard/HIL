@@ -86,6 +86,7 @@ class RunReport:
     steps: list[StepResult] = field(default_factory=list)
     measurements: list[Measurement] = field(default_factory=list)
     captures: list[dict[str, Any]] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     def counts(self) -> dict[str, int]:
         skipped = sum(1 for s in self.steps if s.skipped)
@@ -96,6 +97,7 @@ class RunReport:
             "failed": failed,
             "skipped": skipped,
             "measurements": len(self.measurements),
+            "artifacts": len(self.artifacts),
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -118,6 +120,8 @@ class RunReport:
             d["measurements"] = [m.to_dict() for m in self.measurements]
         if self.captures:
             d["captures"] = self.captures
+        if self.artifacts:
+            d["artifacts"] = self.artifacts
         return d
 
     def human(self) -> str:
@@ -149,6 +153,17 @@ class RunReport:
                 f" (n={c.get('count', 0)}, {c.get('rate_hz', 0)} Hz)"
                 + (f" -> {c['file']}" if c.get("file") else "")
             )
+        for a in self.artifacts:
+            kind = a.get("kind", "")
+            if kind == "decoded":
+                detail = f"{a.get('frames', 0)} frames"
+            else:
+                detail = f"{a.get('sample_count', 0)} samples"
+                if a.get("sample_rate_hz"):
+                    detail += f" @{a.get('sample_rate_hz')} Hz"
+            lines.append(f"  artifact {kind}: {detail}")
+            if a.get("path"):
+                lines.append(f"        -> {a['path']}")
         return "\n".join(lines)
 
     def markdown(self) -> str:
@@ -187,5 +202,20 @@ class RunReport:
                 out.append(
                     f"| `{c.get('channel', '')}` | {c.get('count', 0)} | {c.get('mean')} "
                     f"| {c.get('min')} | {c.get('max')} | {c.get('rate_hz', 0)} | {c.get('units', '')} |"
+                )
+        if self.artifacts:
+            out += [
+                "",
+                "**Artifacts:**",
+                "",
+                "| kind | format | channels | samples/frames | rate (Hz) | path |",
+                "|---|---|--:|--:|--:|---|",
+            ]
+            for a in self.artifacts:
+                n = a.get("sample_count") if a.get("kind") != "decoded" else a.get("frames")
+                chans = a.get("channels") or ""
+                out.append(
+                    f"| `{a.get('kind', '')}` | {a.get('format', '')} | {chans} | {n or 0} "
+                    f"| {a.get('sample_rate_hz', '')} | `{a.get('path', '')}` |"
                 )
         return "\n".join(out)

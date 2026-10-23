@@ -1,0 +1,48 @@
+# Provisioning recipe: Nordic Power Profiler Kit II (PPK2).
+#
+# The PPK2 driver (hil.drivers.ppk2) wraps the optional GPLv2 `ppk2-api` Python
+# package; HIL's MIT core never vendors it. This recipe installs that package and
+# the native `libusb` runtime it needs, then verifies the import.
+#
+#   hil setup ppk2            # install (pip is unprivileged; libusb may gate)
+#   hil setup ppk2 --yes      # ...and allow the privileged libusb install
+slug: ppk2
+driver: ppk2
+description: >
+  Nordic Power Profiler Kit II backend — the GPLv2 ppk2-api Python package plus
+  the native libusb runtime. Pure-Python install; no compilation.
+license: GPLv2
+homepage: https://github.com/IRNAS/ppk2-api-python
+
+# The backend is ready when the ppk2_api package imports.
+detect:
+  - python_import: ppk2_api
+
+steps:
+  - id: pip-ppk2-api
+    name: Install the ppk2-api Python backend
+    pip:
+      packages: [ppk2-api]
+
+  - id: libusb
+    name: Install libusb (native USB runtime for pyusb)
+    privileged: true          # system package -> gated behind --yes
+    optional: true            # many wheels/OSes already provide it
+    system:
+      macos:
+        brew: [libusb]
+      linux:
+        apt-get: [libusb-1.0-0-dev]
+        dnf: [libusb1-devel]
+        pacman: [libusb]
+        zypper: [libusb-1_0-devel]
+      windows:
+        choco: [libusb]
+
+verify:
+  - python_import: ppk2_api
+
+notes: >
+  After provisioning, connect with `hil connect ppk2:///dev/cu.usbmodemXXXX` (macOS)
+  or the matching serial port. The PPK2's 8 digital channels are inputs only and
+  are not exposed by upstream ppk2-api yet (the driver reports a clear error).

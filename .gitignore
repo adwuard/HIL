@@ -15,6 +15,13 @@ scraped/
 logs/
 *.ndjson
 
+# logic-analyzer capture spool (short-term artifacts from `logic`/`decode` steps)
+.hil-spool/
+
+# on-demand provisioning: cloned sources, native builds, downloads (optional backends)
+third_party/work/
+.hil-provision/
+
 # NOTE: data/ holds *versioned* corpus snapshots (tar.gz + index) and IS tracked.
 # Only the working scraped/ tree above is ignored.
 

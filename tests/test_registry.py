@@ -19,6 +19,16 @@ def test_builtin_registry_loads():
     assert any(c.syntax == ":SOUR:VOLT <v>" for c in smu.commands)
 
 
+def test_logic_analyzer_device_routes_to_logic_driver():
+    devices = load_registry()
+    la = devices["alientek-atk-logic"]
+    assert la.driver == "logic" and la.category == "logic-analyzer"
+    assert {"logic-capture", "protocol-decode", "stream-to-disk"} <= set(la.capabilities)
+    # the pseudo-SCPI facade verbs the driver answers are all declared
+    heads = {c.syntax.split()[0] for c in la.commands if c.syntax}
+    assert ":FETCh?" in heads and ":DEC" in heads and ":ACQ:ARM" in heads
+
+
 def test_safety_blocked():
     devices = load_registry()
     smu = devices["keithley-2400"]

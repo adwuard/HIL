@@ -42,9 +42,24 @@ def test_bare_visa_resource():
     assert addr.path == "TCPIP::192.168.1.5::INSTR"
 
 
+def test_logic_with_port():
+    addr = parse_address("logic://127.0.0.1:5555")
+    assert addr.scheme == "logic"
+    assert addr.host == "127.0.0.1"
+    assert addr.port == 5555
+    assert str(addr) == "logic://127.0.0.1:5555"
+
+
+def test_logic_default_port():
+    addr = parse_address("logic://atk-daemon.local")
+    assert addr.scheme == "logic"
+    assert addr.host == "atk-daemon.local"
+    assert addr.port == 5555
+
+
 @pytest.mark.parametrize(
     "bad",
-    ["", "no-scheme", "ftp://x", "tcp://", "serial://?baud=9600", "serial:///dev/x?baud=abc"],
+    ["", "no-scheme", "ftp://x", "tcp://", "logic://", "serial://?baud=9600", "serial:///dev/x?baud=abc"],
 )
 def test_invalid_addresses(bad: str):
     with pytest.raises(AddressError):

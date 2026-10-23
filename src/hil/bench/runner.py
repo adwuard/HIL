@@ -81,6 +81,7 @@ def _execute(
     variables: dict[str, Any],
     measurements: list[Measurement],
     captures: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     sr: StepResult,
     *,
     coe: bool = False,
@@ -186,13 +187,112 @@ def _execute(
         if args.get("save_as"):
             variables[args["save_as"]] = stats.get("mean")
 
+    elif stype == "logic":
+        _run_logic(args, inst, variables, artifacts, sr)
+
+    elif stype == "decode":
+        _run_decode(args, inst, variables, artifacts, sr)
+
     elif stype == "repeat":
-        _run_repeat(args, inst, variables, measurements, captures, sr,
+        _run_repeat(args, inst, variables, measurements, captures, artifacts, sr,
                     coe=coe, on_step=on_step)
 
     else:  # pragma: no cover - validation rejects unknown types first
         sr.ok = False
         sr.message = f"unknown step type '{stype}'"
+
+
+def _logic_kwargs(args: dict[str, Any]) -> dict[str, Any]:
+    """Map a ``logic`` step's args (with synonyms) to run_capture() kwargs."""
+    kw: dict[str, Any] = {}
+    if args.get("channels") is not None:
+        kw["channels"] = args["channels"]
+    rate = args.get("sample_rate_hz", args.get("rate"))
+    if rate is not None:
+        kw["sample_rate_hz"] = float(rate)
+    depth = args.get("depth_samples", args.get("depth"))
+    if depth is not None:
+        kw["depth_samples"] = int(float(depth))
+    dur = args.get("duration_s", args.get("seconds"))
+    if dur is not None:
+        kw["duration_s"] = float(dur)
+    if args.get("trigger") is not None:
+        kw["trigger"] = args["trigger"]
+    if args.get("format"):
+        kw["fmt"] = str(args["format"])
+    if args.get("mode"):
+        kw["mode"] = str(args["mode"])
+    if args.get("out"):
+        kw["out"] = str(args["out"])
+    if args.get("timeout") is not None:
+        kw["timeout"] = float(args["timeout"])
+    return kw
+
+
+def _run_logic(
+    args: dict[str, Any],
+    inst: Instrument,
+    variables: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+    sr: StepResult,
+) -> None:
+    """Run a logic-analyzer capture into a file-backed artifact."""
+    run_capture = getattr(inst, "run_capture", None)
+    if not callable(run_capture):
+        raise HilError(
+            "a 'logic' step needs a logic-analyzer instrument (device driver "
+            "'logic', address 'logic://host:port'); this run is not on one"
+        )
+    art = run_capture(**_logic_kwargs(args))
+    d = art.to_dict()
+    artifacts.append(d)
+    sr.value = d
+    sr.response = (f"{d.get('sample_count', 0)} samples "
+                   f"@{d.get('sample_rate_hz', 0)} Hz -> {d.get('path', '')}")
+    if args.get("save_as"):
+        variables[args["save_as"]] = d.get("path")
+
+
+def _run_decode(
+    args: dict[str, Any],
+    inst: Instrument,
+    variables: dict[str, Any],
+    artifacts: list[dict[str, Any]],
+    sr: StepResult,
+) -> None:
+    """Decode an artifact's protocol data into a decoded artifact."""
+    decode_fn = getattr(inst, "decode", None)
+    if not callable(decode_fn):
+        raise HilError(
+            "a 'decode' step needs a logic-analyzer instrument (device driver 'logic')"
+        )
+    decs = args.get("decoders")
+    if decs is None:
+        name = args.get("decoder")
+        entry: dict[str, Any] = {"name": name}
+        if args.get("options"):
+            entry["options"] = args["options"]
+        cmap = args.get("map", args.get("channels"))
+        if cmap:
+            entry["channels"] = cmap
+        decs = [entry]
+    kwargs: dict[str, Any] = {}
+    if args.get("format"):
+        kwargs["fmt"] = str(args["format"])
+    if args.get("out"):
+        kwargs["out"] = str(args["out"])
+    src = args.get("input")
+    if isinstance(src, str) and src in variables:
+        src = variables[src]
+    if src is not None:
+        kwargs["artifact"] = src
+    art = decode_fn(decs, **kwargs)
+    d = art.to_dict()
+    artifacts.append(d)
+    sr.value = d
+    sr.response = f"{d.get('frames', 0)} frames -> {d.get('path', '')}"
+    if args.get("save_as"):
+        variables[args["save_as"]] = d.get("frames", d.get("path"))
 
 
 def _run_repeat(
@@ -201,6 +301,7 @@ def _run_repeat(
     variables: dict[str, Any],
     measurements: list[Measurement],
     captures: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     sr: StepResult,
     *,
     coe: bool = False,
@@ -230,7 +331,7 @@ def _run_repeat(
     for _ in range(max(0, count)):
         cycle_failed = False
         for st in body:
-            sub = _run_step(st, inst, variables, measurements, captures,
+            sub = _run_step(st, inst, variables, measurements, captures, artifacts,
                             coe=coe, on_step=on_step)
             if on_step is not None:
                 on_step(sub)
@@ -257,6 +358,7 @@ def _run_step(
     variables: dict[str, Any],
     measurements: list[Measurement],
     captures: list[dict[str, Any]],
+    artifacts: list[dict[str, Any]],
     *,
     coe: bool = False,
     on_step: StepHook | None = None,
@@ -270,7 +372,7 @@ def _run_step(
     )
     started = time.monotonic()
     try:
-        _execute(step.type, args, inst, variables, measurements, captures, sr,
+        _execute(step.type, args, inst, variables, measurements, captures, artifacts, sr,
                  coe=coe, on_step=on_step)
     except HilError as exc:
         sr.ok = False
@@ -297,6 +399,7 @@ def run_procedure(
     variables = dict(proc.variables)
     measurements: list[Measurement] = []
     captures: list[dict[str, Any]] = []
+    artifacts: list[dict[str, Any]] = []
     results: list[StepResult] = []
     t0 = time.monotonic()
     report = RunReport(
@@ -336,7 +439,7 @@ def run_procedure(
                 sr = StepResult(index=s.index, type=s.type, summary=s.summary(),
                                 ok=False, skipped=True)
             else:
-                sr = _run_step(s, inst, variables, measurements, captures,
+                sr = _run_step(s, inst, variables, measurements, captures, artifacts,
                                coe=coe, on_step=on_step)
                 if not sr.ok and not coe:
                     halted = True
@@ -352,6 +455,7 @@ def run_procedure(
     report.steps = results
     report.measurements = measurements
     report.captures = captures
+    report.artifacts = artifacts
     report.duration_s = time.monotonic() - t0
     report.ok = not any((not s.ok and not s.skipped) for s in results)
     return report

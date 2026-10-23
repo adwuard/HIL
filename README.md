@@ -39,12 +39,14 @@ surfaced as clean JSON that a human *or* a model can drive.
 |---|---|---|
 | **Transport** | `hil.transports` | One byte-pipe to the instrument: raw **TCP** socket (stdlib, always on), **RS-232 serial**, and **VISA** (GPIB / USB / Ethernet). Optional backends install as extras, so the base stays light. |
 | **Instrument** | `hil.instrument` | One `Instrument` interface — `write` / `query` / `execute`, the IEEE-488.2 commons, error-queue draining, `safe_execute`, and `capture()` for time-stamped sampling. `hil.scpi.ScpiInstrument` is the default implementation; non-SCPI devices plug in as drivers. |
-| **Drivers** | `hil.drivers` | A pluggable registry that maps a device to its instrument implementation. Built-ins: `scpi` and `ppk2` (Nordic Power Profiler Kit II). Third parties register their own via the `hil.drivers` entry-point group — no fork required. |
+| **Drivers** | `hil.drivers` | A pluggable registry that maps a device to its instrument implementation. Built-ins: `scpi`, `ppk2` (Nordic Power Profiler Kit II) and `logic` (logic analyzers, e.g. ALIENTEK ATK-Logic). Third parties register their own via the `hil.drivers` entry-point group — no fork required. |
+| **Provision** | `hil.provision` | **On-demand setup of the optional device backends** HIL doesn't bundle (GPL or native builds). Declarative YAML *recipes* go detect → fetch/build → verify, driven by `hil setup`, surfaced in `hil doctor`, and triggered automatically by `connect()` under `HIL_AUTO_PROVISION`. Privileged installs and long compiles are gated behind `--yes`. |
 | **Knowledge** | `hil.registry` | Declarative **YAML device profiles**: capabilities, command sets, connection examples, a `driver:` field, and a **safety policy** (block / allow / limits). Drop in your own dirs to extend it. |
-| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
+| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, `logic://host:5555`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
 | **Telemetry** | `hil.telemetry` | Long-run **data logging + analytics**: append-only `Sample` records (timestamp, channel, value, units) to NDJSON/CSV, and `summarize()` for count, rate, mean/min/max/std, percentiles and energy (∫P·dt). Stdlib only. |
+| **Artifacts** | `hil.artifacts` | **File-based captures** for high-volume devices (logic analyzers): a `CaptureArtifact` (path + metadata, never bulk bytes in memory) and a TTL-managed `ArtifactSpool` with retain/cleanup and NDJSON sidecars. Stdlib only. |
 | **Errors** | `hil.errors` | A typed hierarchy where every message is *agent-actionable*: what failed, why, and the next step. |
-| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + `capture` and `repeat` (loop) steps + reports. Safety-first, and it runs with **zero hardware**. |
+| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + `capture`, `repeat` (loop), `logic` and `decode` steps + reports. Safety-first, and it runs with **zero hardware**. |
 | **Interface** | `hil.cli` | An agent-first CLI — every command emits stable `--json` with meaningful exit codes, including `hil log` and `hil analyze`. |
 
 ## Built to be driven by AI
@@ -170,7 +172,8 @@ facade (`:SOUR:VOLT`, `:OUTP`, `:CONF:MODE`, `:INIT:ACQ`, `:MEAS:CURR?`,
 *optional, user-installed* extra — never vendored into the core:
 
 ```bash
-pip install 'hil-harness[ppk2]'   # pulls in ppk2-api; the ppk2 driver activates
+hil setup ppk2                    # on-demand: installs ppk2-api + libusb (see below)
+pip install 'hil-harness[ppk2]'   # or directly; the ppk2 driver activates either way
 ```
 
 > The PPK2's 8 digital channels are **inputs only** — a low-end logic analyzer for
@@ -213,6 +216,93 @@ def ocd_driver(addr, device, timeout=5.0):
 
 Then give the device a profile with `driver: myocd` and an address scheme, and it
 inherits safety checks, bench steps, the simulator and `--json` reporting for free.
+
+### Logic analyzers (ALIENTEK ATK-Logic)
+
+A logic analyzer breaks the SCPI mould: captures are **huge** (MBs-GBs),
+**timing-critical**, and only useful once **protocol-decoded**. So HIL splits it
+into two processes:
+
+- A **capture daemon** (GPLv3) owns the USB device, runs the real-time libusb
+  stream and the `libsigrokdecode` decoders, and writes captures to disk. For the
+  ALIENTEK ATK-Logic this is a headless `--server` build of the `atk-logic` Qt app.
+- HIL is a **thin MIT client** (`driver: logic`, address `logic://host:5555`) that
+  keeps one persistent JSON-RPC connection and receives captures as **artifacts**
+  (a path + metadata), never as bulk bytes in memory. GPL stays out of HIL, and
+  the timing-sensitive work stays out of the control loop.
+
+```python
+from hil import connect
+la = connect("logic://127.0.0.1:5555", device_slug="alientek-atk-logic")
+la.write(":CONF:CHAN 0,1"); la.write(":CONF:RATE 4000000")
+la.write(":TRIG:CHAN 0"); la.write(":TRIG:EDGE R")
+wave = la.run_capture(seconds=0.5, format="csv")   # -> CaptureArtifact (path + metadata)
+dec  = la.decode("i2c")                            # -> decoded artifact (frames)
+print(wave.path, wave.sample_count, dec.frames)
+```
+
+In a procedure, the `logic` and `decode` steps produce artifacts that land in a
+TTL-managed **spool** (`$HIL_SPOOL_DIR` or `./.hil-spool`) and are recorded in the
+run report; `save_as` binds the artifact path (`logic`) or frame count (`decode`)
+for later steps and assertions:
+
+```yaml
+device: alientek-atk-logic
+steps:
+  - write: ":CONF:CHAN 0,1"
+  - write: ":CONF:RATE 4000000"
+  - logic:  {seconds: 0.5, format: csv, trigger: {channel: 0, edge: rising}, save_as: wave}
+  - decode: {decoder: i2c, map: {scl: 0, sda: 1}, save_as: frames}
+  - assert: {that: frames, op: gt, value: 0}
+```
+
+This runs with **zero hardware** on the built-in simulator (a synthetic capture
+backend), so you can develop and CI the whole flow before a device is attached.
+See `examples/bench/atk-logic-i2c-decode.yaml`, and `docs/logic-daemon-protocol.md`
+for the daemon's JSON-RPC contract, cross-platform packaging and phasing.
+
+## Optional device backends — `hil setup`
+
+Most of HIL works the moment you install it. A few devices need an *optional*
+backend that HIL deliberately does **not** bundle — either because it's
+GPL-licensed (and must stay out of the MIT core) or because it's a large native
+build. For those, HIL provisions the right thing **on demand**: install HIL, reach
+for a device, and `hil setup` fetches, builds and verifies whatever it needs.
+
+```bash
+hil setup                         # what each backend needs, and whether it's ready
+hil setup --list                  # list the provisioning recipes
+hil setup ppk2                    # Nordic PPK2: pip install ppk2-api + libusb
+hil setup alientek-atk-logic --yes   # ATK-Logic: toolchain + clone + native build
+hil setup logic --dry-run         # print the whole plan, run nothing
+hil doctor                        # env + backend availability, incl. provisioning
+```
+
+A **recipe** (declarative YAML) describes how to make one backend available:
+`detect` probes (is it already usable?), `steps` to fetch/build it (`pip`,
+`system`, `git`, `shell`), and `verify` probes to confirm the result. Recipes are
+cross-platform and cross-compile aware (`HIL_CROSS_TARGET=android-arm64 …`), and you
+can add or override one without touching HIL — drop a file in `third_party/recipes/`
+or point `$HIL_RECIPES_DIR` at a folder.
+
+**Safety first.** Provisioning can install packages and compile code, so it never
+does anything surprising:
+
+- **Privileged steps** (system installs that may need `sudo`) run **only** with
+  `--yes`; otherwise they're reported as *gated*, with the exact command to run.
+- **Heavy steps** (a long native compile) are gated too, so nothing stalls unattended.
+- `--dry-run` prints every command without executing it.
+
+**On demand, automatically.** Set `HIL_AUTO_PROVISION=1` and `hil.connect()` runs the
+*safe* steps (pip installs, git clones) for a device whose backend is missing before
+connecting — while privileged installs and heavy builds still wait for an explicit
+`hil setup … --yes`. When a backend is missing, `connect()` and the driver errors
+point you at the exact `hil setup <slug>` command.
+
+It all lives in `third_party/`: `bootstrap.sh` (a thin `hil setup` wrapper for a
+fresh clone), `recipes/` (your overrides), and `work/` (git-ignored clones and
+builds). See [`third_party/README.md`](third_party/README.md) for the recipe format
+and the environment variables.
 
 ## Data logging & analytics
 
@@ -278,7 +368,7 @@ corpus is a versioned dataset under `data/` that you can add to the registry.
 
 ### Every instrument, by brand and type
 
-Model numbers only — grouped by manufacturer, then instrument type. The five
+Model numbers only — grouped by manufacturer, then instrument type. The six
 hand-curated profiles load by default with safety policies:
 
 | Slug | Instrument | Type | Driver |
@@ -288,6 +378,7 @@ hand-curated profiles load by default with safety policies:
 | `keysight-ac6801b` | Keysight AC6801B | AC power source | `scpi` |
 | `ea-el9000b` | EA EL9000B | DC power supply | `scpi` |
 | `nordic-ppk2` | Nordic Power Profiler Kit II | Power profiler (non-SCPI) | `ppk2` |
+| `alientek-atk-logic` | ALIENTEK ATK-Logic | Logic analyzer (non-SCPI, daemon) | `logic` |
 
 The rest of the corpus lives in the versioned dataset under `data/`.
 
@@ -622,7 +713,8 @@ backend, GPLv2), `.[all]`, `.[dev]`. Python 3.10+. Core requires only PyYAML.
 
 ## Status
 
-**v0.1.0** — transports, SCPI layer, a pluggable instrument/driver registry (with a
-non-SCPI PPK2 driver), telemetry (logging + analytics), bench, and CLI are live and
-tested. The MCP server and a PyPI release as `hil-harness` are next.
+**v0.1.0** — transports, SCPI layer, a pluggable instrument/driver registry (with
+non-SCPI PPK2 and logic-analyzer drivers), telemetry (logging + analytics), bench,
+on-demand backend provisioning (`hil setup`), and CLI are live and tested. The MCP
+server and a PyPI release as `hil-harness` are next.
 MIT licensed.

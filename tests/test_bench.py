@@ -202,7 +202,7 @@ def test_failing_assert_halts_by_default():
     report = _run(proc)
     assert report.ok is False
     assert report.counts() == {"total": 3, "passed": 1, "failed": 1, "skipped": 1,
-                               "measurements": 1}
+                               "measurements": 1, "artifacts": 0}
     assert report.steps[2].skipped is True
 
 

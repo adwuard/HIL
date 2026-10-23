@@ -1,0 +1,78 @@
+slug: alientek-atk-logic
+manufacturer: ALIENTEK
+model: ATK-Logic
+category: logic-analyzer
+driver: logic                   # non-SCPI: routed to hil.drivers.logic
+description: >
+  ALIENTEK logic analyzer (MCU/FPGA over USB). Not SCPI and not a stock sigrok
+  driver: capture runs in a separate headless daemon (a --server build of the
+  GPLv3 atk-logic app) that owns the device and does libsigrokdecode decoding.
+  HIL is a thin MIT client that drives it over JSON-RPC on logic://host:port and
+  receives captures as file-backed artifacts, never as bulk in-memory samples.
+interfaces: [usb]
+connection_examples:
+  - logic://127.0.0.1:5555       # local capture daemon (default port)
+capabilities:
+  - logic-capture
+  - hardware-trigger
+  - protocol-decode
+  - stream-to-disk
+safety:
+  # Informational envelope for the analyzer; keep captures inside it.
+  limits:
+    channels: 1..16
+    sample_rate: 1..200000000 Hz
+commands:
+  - name: set-channels
+    syntax: ':CONF:CHAN <n|list>'
+    description: Enable channels — a count (e.g. 8) or an index list (e.g. 0,1,2,3).
+    subsystem: CONFigure
+    parameters: '<n|list> = channel count or comma/space-separated indices'
+  - name: set-sample-rate
+    syntax: ':CONF:RATE <hz>'
+    description: Set the sample rate in hertz.
+    parameters: '<hz> sample rate, e.g. 1000000'
+  - name: set-depth
+    syntax: ':CONF:DEPTH <samples>'
+    description: Capture depth in samples (alternative to a duration).
+  - name: set-duration
+    syntax: ':CONF:DUR <seconds>'
+    description: Capture duration in seconds (alternative to a depth).
+  - name: set-format
+    syntax: ':CONF:FORM <fmt>'
+    description: Fetch format for the capture artifact.
+    parameters: '<fmt> = csv | srzip | raw'
+  - name: set-trigger-channel
+    syntax: ':TRIG:CHAN <n>'
+    description: Trigger on channel n.
+  - name: set-trigger-level
+    syntax: ':TRIG:LEV <0|1>'
+    description: Trigger level (0 or 1).
+  - name: set-trigger-edge
+    syntax: ':TRIG:EDGE <R|F>'
+    description: Trigger edge — R (rising) or F (falling).
+  - name: set-trigger-position
+    syntax: ':TRIG:POS <pct>'
+    description: Trigger position within the buffer, in percent (0..100).
+  - name: arm-capture
+    syntax: ':ACQ:ARM'
+    description: Configure and arm the capture (alias :INIT:ACQ).
+  - name: wait-capture
+    syntax: ':ACQ:WAIT'
+    description: Block until the armed capture completes (trigger + fill).
+  - name: stop-capture
+    syntax: ':ACQ:STOP'
+    description: Abort/stop the current capture (alias :MEAS:STOP).
+  - name: capture-state
+    syntax: ':ACQ:STAT?'
+    query: true
+    description: Current state — idle | armed | capturing | triggered | done | error.
+  - name: fetch-capture
+    syntax: ':FETCh?'
+    query: true
+    description: Fetch the last capture; returns the artifact file path.
+  - name: decode
+    syntax: ':DEC <name>?'
+    query: true
+    description: Run a protocol decoder over the last capture; returns the decoded path.
+    parameters: '<name> = a libsigrokdecode decoder, e.g. i2c | spi | uart'

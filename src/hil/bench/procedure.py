@@ -78,6 +78,16 @@ STEP_SPECS: dict[str, dict[str, Any]] = {
     "capture": {"required": ["channel", "seconds"],
                 "optional": ["interval", "units", "save_as", "out"], "primary": None},
     "repeat":  {"required": ["count", "steps"], "optional": [], "primary": None},
+    # Logic-analyzer capture -> a file-backed artifact (not in-memory samples).
+    # Needs a capture size: one of seconds/duration_s or depth/depth_samples.
+    "logic":   {"required": [], "primary": None,
+                "optional": ["channels", "rate", "sample_rate_hz", "depth",
+                             "depth_samples", "seconds", "duration_s", "trigger",
+                             "format", "mode", "timeout", "out", "save_as"]},
+    # Protocol decode over an artifact -> a decoded artifact.
+    "decode":  {"required": [], "primary": "decoder",
+                "optional": ["decoder", "decoders", "input", "options",
+                             "channels", "map", "format", "out", "save_as"]},
 }
 STEP_TYPES = tuple(STEP_SPECS)
 
@@ -149,6 +159,22 @@ class Step:
             body = a.get("steps") or []
             n = len(body) if isinstance(body, list) else 0
             return f"repeat {a.get('count', 0)}x ({n} steps)"
+        if self.type == "logic":
+            size = a.get("seconds", a.get("duration_s"))
+            depth = a.get("depth", a.get("depth_samples"))
+            what = f"{size}s" if size else (f"{depth} samples" if depth else "")
+            base = f"logic capture {what}".rstrip()
+            if a.get("channels") is not None:
+                base += f" ch={a['channels']}"
+            if a.get("save_as"):
+                base += f" -> {a['save_as']}"
+            return base
+        if self.type == "decode":
+            name = a.get("decoder") or a.get("decoders")
+            base = f"decode {name}"
+            if a.get("save_as"):
+                base += f" -> {a['save_as']}"
+            return base
         return self.type
 
 
@@ -281,6 +307,32 @@ def _validate_step(step: Step) -> list[str]:
                 elif sub is not None:
                     for e in _validate_step(sub):
                         errs.append(f"step {step.index} ('repeat') -> {e}")
+    if step.type == "logic":
+        a = step.args
+        has_size = (_numeric_or_var(a.get("seconds")) or _numeric_or_var(a.get("duration_s"))
+                    or _numeric_or_var(a.get("depth")) or _numeric_or_var(a.get("depth_samples")))
+        if not has_size:
+            errs.append(
+                f"step {step.index} ('logic'): needs a capture size — one of "
+                "'seconds', 'duration_s', 'depth' or 'depth_samples'"
+            )
+        for key in ("seconds", "duration_s", "rate", "sample_rate_hz",
+                    "depth", "depth_samples", "timeout"):
+            if key in a and not _numeric_or_var(a.get(key)):
+                errs.append(f"step {step.index} ('logic'): '{key}' must be a number or ${{var}}")
+        trig = a.get("trigger")
+        if trig is not None and not isinstance(trig, dict):
+            errs.append(f"step {step.index} ('logic'): 'trigger' must be a mapping")
+    if step.type == "decode":
+        a = step.args
+        if not a.get("decoder") and not a.get("decoders"):
+            errs.append(
+                f"step {step.index} ('decode'): needs 'decoder' (a name) or "
+                "'decoders' (a list)"
+            )
+        decs = a.get("decoders")
+        if decs is not None and not isinstance(decs, (list, dict, str)):
+            errs.append(f"step {step.index} ('decode'): 'decoders' must be a name, list or mapping")
     return errs
 
 

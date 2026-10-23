@@ -1,0 +1,2 @@
+# Drop lab-local provisioning recipes here (*.yaml); they merge over the
+# bundled ones (src/hil/provision/recipes/) by slug. See ../README.md.

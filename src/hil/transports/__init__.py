@@ -15,6 +15,10 @@ def create_transport(addr: Address, timeout: float = 5.0) -> BaseTransport:
     """Build (but do not open) the transport for a parsed address."""
     if addr.scheme == "tcp":
         return TcpTransport(addr.host, addr.port, timeout=timeout)
+    if addr.scheme == "logic":
+        # A logic-analyzer capture daemon: JSON-RPC framed over a plain socket
+        # by hil.drivers.logic, so the byte-pipe is just TCP.
+        return TcpTransport(addr.host, addr.port, timeout=timeout)
     if addr.scheme == "serial":
         from .serial import SerialTransport
 
@@ -32,7 +36,7 @@ def create_transport(addr: Address, timeout: float = 5.0) -> BaseTransport:
 
 def backend_status() -> dict[str, bool]:
     """Report which optional backends are importable right now (for `hil doctor`)."""
-    status = {"tcp": True, "serial": False, "visa": False, "usb": False}
+    status = {"tcp": True, "serial": False, "visa": False, "usb": False, "logic": True}
     try:
         import serial  # noqa: F401
 

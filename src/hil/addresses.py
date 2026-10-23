@@ -6,6 +6,7 @@ Supported address forms:
     serial://PORT[?baud=9600]         RS-232, e.g. serial:///dev/ttyUSB0?baud=9600
     visa://VISA_RESOURCE              any VISA resource, e.g. visa://GPIB::24::INSTR
     ppk2://PORT                       Nordic Power Profiler Kit II (non-SCPI driver)
+    logic://host[:port]               logic-analyzer capture daemon (default port 5555)
     GPIB::24::INSTR                   bare VISA resource (auto-detected by '::')
 
 A bare word that is not an address (e.g. ``keithley-2400``) is treated as a
@@ -21,8 +22,9 @@ from .errors import AddressError
 
 DEFAULT_SCPI_PORT = 5025
 DEFAULT_BAUD = 9600
+DEFAULT_LOGIC_PORT = 5555
 
-SUPPORTED_SCHEMES = ("tcp", "serial", "visa", "ppk2")
+SUPPORTED_SCHEMES = ("tcp", "serial", "visa", "ppk2", "logic")
 
 
 @dataclass(frozen=True)
@@ -30,7 +32,7 @@ class Address:
     """A parsed instrument address."""
 
     scheme: str
-    """Transport scheme: 'tcp', 'serial', 'visa', or 'ppk2'."""
+    """Transport scheme: 'tcp', 'serial', 'visa', 'ppk2', or 'logic'."""
 
     host: str = ""
     """Remote host (tcp)."""
@@ -47,6 +49,8 @@ class Address:
     def __str__(self) -> str:  # pragma: no cover - display only
         if self.scheme == "tcp":
             return f"tcp://{self.host}:{self.port}"
+        if self.scheme == "logic":
+            return f"logic://{self.host}:{self.port}"
         if self.scheme == "serial":
             qs = "".join(f"&{k}={v}" for k, v in self.params.items())
             return f"serial://{self.path}{qs}"
@@ -90,6 +94,17 @@ def parse_address(raw: str) -> Address:
         if not host:
             raise AddressError(f"Missing host in tcp address '{raw}'.")
         return Address(scheme="tcp", host=host, port=parts.port or DEFAULT_SCPI_PORT)
+
+    if scheme == "logic":
+        # logic://host[:port] — a logic-analyzer capture daemon (JSON-RPC over TCP)
+        parts = urlsplit(f"//{rest}", scheme="logic")
+        host = parts.hostname or ""
+        if not host:
+            raise AddressError(
+                f"Missing host in logic address '{raw}'. "
+                "Expected e.g. 'logic://127.0.0.1:5555'."
+            )
+        return Address(scheme="logic", host=host, port=parts.port or DEFAULT_LOGIC_PORT)
 
     # serial:// and visa:// keep the remainder verbatim (minus query for serial)
     if scheme == "serial":

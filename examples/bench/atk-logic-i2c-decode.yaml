@@ -1,0 +1,45 @@
+# Run:  hil bench run examples/bench/atk-logic-i2c-decode.yaml
+# Dry-runs on the built-in simulator (no --address): a synthetic capture backend
+# writes small artifacts to a throwaway spool, so the whole flow (configure ->
+# capture -> decode -> assert) runs with no hardware.
+#
+# To drive a real ALIENTEK ATK-Logic, start its capture daemon and point HIL at
+# it:  hil bench run examples/bench/atk-logic-i2c-decode.yaml --address logic://127.0.0.1:5555
+# The daemon (a headless --server build of the GPLv3 atk-logic app) owns the USB
+# device and runs libsigrokdecode; HIL stays a thin MIT JSON-RPC client and gets
+# captures back as file artifacts. See docs/logic-daemon-protocol.md.
+name: ATK-Logic I2C capture and decode
+description: >
+  Arm a 2-channel capture with a hardware trigger on SCL, fetch the waveform to
+  a spool artifact, decode I2C, and check the decoder produced frames.
+device: alientek-atk-logic
+variables:
+  rate_hz: 4000000        # 4 MS/s is plenty for a 400 kHz I2C bus
+  window_s: 0.5
+  spool: .hil-spool
+sim:
+  idn: "ALIENTEK,ATK-Logic,SIM0001,sim"
+steps:
+  - log: "capturing ${window_s}s of I2C at ${rate_hz} Hz, triggered on SCL"
+  # Channel 0 = SCL, channel 1 = SDA.
+  - write: ":CONF:CHAN 0,1"
+  - write: ":CONF:RATE ${rate_hz}"
+  - write: ":CONF:FORM csv"
+  # Trigger on the first SCL rising edge, placed 10% into the buffer.
+  - write: ":TRIG:CHAN 0"
+  - write: ":TRIG:EDGE R"
+  - write: ":TRIG:LEV 1"
+  - write: ":TRIG:POS 10"
+  # Arm + capture + fetch to a file-backed artifact (never bulk in memory).
+  - logic:
+      seconds: ${window_s}
+      format: csv
+      save_as: wave            # wave = the artifact path
+  # Decode I2C over the captured artifact (SCL=ch0, SDA=ch1).
+  - decode:
+      decoder: i2c
+      map: {scl: 0, sda: 1}
+      format: csv
+      save_as: frames          # frames = decoded frame count
+  - assert: {that: frames, op: gt, value: 0, message: "I2C decoder produced frames"}
+  - log: "waveform -> ${wave}"

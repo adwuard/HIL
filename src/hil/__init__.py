@@ -13,8 +13,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from . import addresses, drivers, errors, instrument, registry, scpi, telemetry, transports
+from . import addresses, artifacts, drivers, errors, instrument, provision, registry, scpi, telemetry, transports
 from .addresses import Address, parse_address
+from .artifacts import ArtifactSpool, CaptureArtifact
 from .errors import HilError
 from .instrument import BaseInstrument, Instrument
 from .registry import Device, load_registry
@@ -38,12 +39,16 @@ __all__ = [
     "Sample",
     "DataLogger",
     "summarize",
+    "CaptureArtifact",
+    "ArtifactSpool",
     "TcpTransport",
     "BaseTransport",
     "addresses",
+    "artifacts",
     "drivers",
     "errors",
     "instrument",
+    "provision",
     "registry",
     "scpi",
     "telemetry",
@@ -109,4 +114,51 @@ def connect(
     driver = (getattr(device, "driver", "scpi") or "scpi")
     if addr.scheme == "ppk2":
         driver = "ppk2"
-    return drivers.get_driver(driver)(addr, device, timeout)
+    elif addr.scheme == "logic":
+        driver = "logic"
+
+    slug = device_slug or (device.slug if device is not None else "")
+    _ensure_backend(driver, slug)
+    try:
+        return drivers.get_driver(driver)(addr, device, timeout)
+    except HilError as exc:
+        _annotate_missing_backend(exc, driver, slug)
+        raise
+
+
+def _ensure_backend(driver: str, device_slug: str) -> None:
+    """Opt-in on-demand provisioning for drivers with an optional backend.
+
+    A no-op unless ``$HIL_AUTO_PROVISION`` is truthy, so a normal ``connect()``
+    never downloads or compiles anything implicitly. When enabled it runs the
+    matching recipe's *non-privileged, non-heavy* steps (pip installs, git
+    clones); sudo installs and long native builds still require an explicit
+    ``hil setup <slug> --yes``.
+    """
+    import os
+    import sys
+
+    if driver == "scpi":                       # built-in transports need no backend
+        return
+    if os.environ.get("HIL_AUTO_PROVISION", "").strip().lower() not in ("1", "true", "yes", "on"):
+        return
+    provision.ensure(
+        driver=driver,
+        device_slug=device_slug,
+        on_output=lambda line: print(line, file=sys.stderr, flush=True),
+    )
+
+
+def _annotate_missing_backend(exc: HilError, driver: str, device_slug: str) -> None:
+    """Append a ``hil setup`` hint to a driver error when a recipe could help.
+
+    Mutates ``exc.args`` in place so the enriched message reaches the CLI (which
+    prints ``str(exc)``) without changing the exception's type.
+    """
+    hint = provision.setup_hint(device_slug=device_slug, driver=driver)
+    if not hint or hint in str(exc):
+        return
+    exc.args = (
+        f"{exc}\n  → if this device needs an optional backend, set it up with: {hint}",
+        *exc.args[1:],
+    )
