@@ -32,6 +32,7 @@ from typing import Any
 
 import yaml
 
+from ..drivers.debug import DEBUG_ACTIONS
 from ..errors import ProcedureError
 from .assertions import OPS
 
@@ -52,6 +53,28 @@ def _numeric_or_var(value: Any) -> bool:
             return True
         try:
             float(s)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+def _int_or_hex_or_var(value: Any) -> bool:
+    """True for ints, ``0x``/``0b``/octal strings, or a whole ``${var}`` reference.
+
+    Memory/flash addresses are written in hex (``0x08000000``), which ``float()``
+    rejects — so addresses/widths use this instead of :func:`_numeric_or_var`.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, int):
+        return True
+    if isinstance(value, str):
+        s = value.strip()
+        if _VAR_REF.match(s):
+            return True
+        try:
+            int(s, 0)
             return True
         except ValueError:
             return False
@@ -88,6 +111,20 @@ STEP_SPECS: dict[str, dict[str, Any]] = {
     "decode":  {"required": [], "primary": "decoder",
                 "optional": ["decoder", "decoders", "input", "options",
                              "channels", "map", "format", "out", "save_as"]},
+    # Build & flash & on-chip debug — the hardware-in-the-loop pipeline
+    # (spec §5.4.5 Build & Flash, §5.11 build -> flash -> debug/run -> capture).
+    # ``build`` records a firmware fingerprint (and may run a compile command);
+    # ``flash`` programs it via the debug driver; ``debug`` drives the probe.
+    "build":   {"required": [], "primary": "artifact",
+                "optional": ["command", "artifact", "firmware", "version",
+                             "cwd", "env", "save_as", "timeout"]},
+    "flash":   {"required": ["firmware"], "primary": "firmware",
+                "optional": ["verify", "erase", "chip", "target", "address",
+                             "tool", "save_as", "timeout"]},
+    "debug":   {"required": ["action"], "primary": "action",
+                "optional": ["action", "address", "width", "count", "register",
+                             "value", "script", "duration_s", "out", "halt",
+                             "timeout_s", "match", "chip", "firmware", "save_as"]},
 }
 STEP_TYPES = tuple(STEP_SPECS)
 
@@ -172,6 +209,34 @@ class Step:
         if self.type == "decode":
             name = a.get("decoder") or a.get("decoders")
             base = f"decode {name}"
+            if a.get("save_as"):
+                base += f" -> {a['save_as']}"
+            return base
+        if self.type == "build":
+            what = a.get("artifact") or a.get("firmware") or a.get("command") or ""
+            base = f"build {what}".rstrip()
+            if a.get("version"):
+                base += f" v={a['version']}"
+            if a.get("save_as"):
+                base += f" -> {a['save_as']}"
+            return base
+        if self.type == "flash":
+            base = f"flash {a.get('firmware', '')}"
+            flags = []
+            if a.get("chip"):
+                flags.append(f"chip={a['chip']}")
+            if a.get("erase"):
+                flags.append("erase")
+            if a.get("verify") is False:
+                flags.append("no-verify")
+            if flags:
+                base += f" ({', '.join(flags)})"
+            if a.get("save_as"):
+                base += f" -> {a['save_as']}"
+            return base
+        if self.type == "debug":
+            extra = a.get("register") or a.get("address") or a.get("script") or ""
+            base = f"debug {a.get('action', '')}" + (f" {extra}" if extra else "")
             if a.get("save_as"):
                 base += f" -> {a['save_as']}"
             return base
@@ -333,6 +398,47 @@ def _validate_step(step: Step) -> list[str]:
         decs = a.get("decoders")
         if decs is not None and not isinstance(decs, (list, dict, str)):
             errs.append(f"step {step.index} ('decode'): 'decoders' must be a name, list or mapping")
+    if step.type == "build":
+        a = step.args
+        if not (a.get("command") or a.get("artifact") or a.get("firmware")):
+            errs.append(
+                f"step {step.index} ('build'): needs a 'command' to run and/or an "
+                "'artifact' (firmware path) to fingerprint"
+            )
+        if "timeout" in a and not _numeric_or_var(a.get("timeout")):
+            errs.append(f"step {step.index} ('build'): 'timeout' must be a number or ${{var}}")
+        if a.get("env") is not None and not isinstance(a.get("env"), dict):
+            errs.append(f"step {step.index} ('build'): 'env' must be a mapping")
+    if step.type == "flash":
+        a = step.args
+        if "address" in a and not _int_or_hex_or_var(a.get("address")):
+            errs.append(
+                f"step {step.index} ('flash'): 'address' must be a number/hex "
+                "(e.g. 0x08000000) or ${{var}}"
+            )
+        if "timeout" in a and not _numeric_or_var(a.get("timeout")):
+            errs.append(f"step {step.index} ('flash'): 'timeout' must be a number or ${{var}}")
+    if step.type == "debug":
+        a = step.args
+        action = str(a.get("action", "")).lower().strip()
+        if action and action not in DEBUG_ACTIONS:
+            errs.append(
+                f"step {step.index} ('debug'): unknown action '{action}' "
+                f"(known: {', '.join(DEBUG_ACTIONS)})"
+            )
+        if action in ("read-mem", "write-mem") and "address" not in a:
+            errs.append(f"step {step.index} ('debug'): action '{action}' needs an 'address'")
+        if action in ("read-reg", "write-reg") and not a.get("register"):
+            errs.append(f"step {step.index} ('debug'): action '{action}' needs a 'register'")
+        if action in ("write-mem", "write-reg") and a.get("value") in (None, ""):
+            errs.append(f"step {step.index} ('debug'): action '{action}' needs a 'value'")
+        if action == "gdb" and not a.get("script"):
+            errs.append(f"step {step.index} ('debug'): action 'gdb' needs a 'script'")
+        if "address" in a and not _int_or_hex_or_var(a.get("address")):
+            errs.append(f"step {step.index} ('debug'): 'address' must be a number/hex or ${{var}}")
+        for key in ("width", "count", "duration_s", "timeout_s"):
+            if key in a and not _numeric_or_var(a.get(key)):
+                errs.append(f"step {step.index} ('debug'): '{key}' must be a number or ${{var}}")
     return errs
 
 

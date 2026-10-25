@@ -57,9 +57,33 @@ def test_logic_default_port():
     assert addr.port == 5555
 
 
+def test_debug_backend_in_host_slot():
+    addr = parse_address("debug://probe-rs")
+    assert addr.scheme == "debug"
+    assert addr.host == "probe-rs"
+    assert addr.params == {}
+    assert str(addr) == "debug://probe-rs"
+
+
+def test_debug_backend_is_lowercased_with_params():
+    addr = parse_address("debug://Auto?target=ESP32&probe=/dev/cu.usb-1&transport=jtag")
+    assert addr.scheme == "debug"
+    assert addr.host == "auto"                              # backend lowercased
+    assert addr.params["target"] == "ESP32"                  # param value verbatim
+    assert addr.params["probe"] == "/dev/cu.usb-1"
+    assert addr.params["transport"] == "jtag"
+
+
+def test_debug_simulator_roundtrip():
+    addr = parse_address("debug://simulator")
+    assert addr.host == "simulator"
+    assert str(addr) == "debug://simulator"
+
+
 @pytest.mark.parametrize(
     "bad",
-    ["", "no-scheme", "ftp://x", "tcp://", "logic://", "serial://?baud=9600", "serial:///dev/x?baud=abc"],
+    ["", "no-scheme", "ftp://x", "tcp://", "logic://", "debug://",
+     "serial://?baud=9600", "serial:///dev/x?baud=abc"],
 )
 def test_invalid_addresses(bad: str):
     with pytest.raises(AddressError):

@@ -6,8 +6,9 @@
 
 **One safe, machine-readable interface to your bench.** Drive oscilloscopes,
 source-measure units, power supplies, waveform generators, DMMs, e-fuses and even
-non-SCPI tools like power profilers from Python, the CLI, or an AI agent — over LAN,
-serial, or GPIB — with per-instrument safety enforced by default.
+non-SCPI tools like power profilers, logic analyzers and on-chip flash/debug probes
+from Python, the CLI, or an AI agent — over LAN, serial, or GPIB — with
+per-instrument safety enforced by default.
 
 ```bash
 pip install git+https://github.com/adwuard/HIL.git     # active development — not on PyPI yet
@@ -39,14 +40,14 @@ surfaced as clean JSON that a human *or* a model can drive.
 |---|---|---|
 | **Transport** | `hil.transports` | One byte-pipe to the instrument: raw **TCP** socket (stdlib, always on), **RS-232 serial**, and **VISA** (GPIB / USB / Ethernet). Optional backends install as extras, so the base stays light. |
 | **Instrument** | `hil.instrument` | One `Instrument` interface — `write` / `query` / `execute`, the IEEE-488.2 commons, error-queue draining, `safe_execute`, and `capture()` for time-stamped sampling. `hil.scpi.ScpiInstrument` is the default implementation; non-SCPI devices plug in as drivers. |
-| **Drivers** | `hil.drivers` | A pluggable registry that maps a device to its instrument implementation. Built-ins: `scpi`, `ppk2` (Nordic Power Profiler Kit II) and `logic` (logic analyzers, e.g. ALIENTEK ATK-Logic). Third parties register their own via the `hil.drivers` entry-point group — no fork required. |
+| **Drivers** | `hil.drivers` | A pluggable registry that maps a device to its instrument implementation. Built-ins: `scpi`, `ppk2` (Nordic Power Profiler Kit II), `logic` (logic analyzers, e.g. ALIENTEK ATK-Logic) and `debug` (on-chip flash/debug: probe-rs, pyOCD, OpenOCD, esptool, stlink). Third parties register their own via the `hil.drivers` entry-point group — no fork required. |
 | **Provision** | `hil.provision` | **On-demand setup of the optional device backends** HIL doesn't bundle (GPL or native builds). Declarative YAML *recipes* go detect → fetch/build → verify, driven by `hil setup`, surfaced in `hil doctor`, and triggered automatically by `connect()` under `HIL_AUTO_PROVISION`. Privileged installs and long compiles are gated behind `--yes`. |
 | **Knowledge** | `hil.registry` | Declarative **YAML device profiles**: capabilities, command sets, connection examples, a `driver:` field, and a **safety policy** (block / allow / limits). Drop in your own dirs to extend it. |
-| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, `logic://host:5555`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
+| **Addressing** | `hil.addresses` | A single resolver for `tcp://host:5025`, `serial:///dev/ttyUSB0?baud=9600`, `visa://GPIB::24::INSTR`, `ppk2:///dev/cu.usbmodem01`, `logic://host:5555`, `debug://probe-rs?target=nrf52840`, a bare `GPIB::24::INSTR`, or a registry **slug**. |
 | **Telemetry** | `hil.telemetry` | Long-run **data logging + analytics**: append-only `Sample` records (timestamp, channel, value, units) to NDJSON/CSV, and `summarize()` for count, rate, mean/min/max/std, percentiles and energy (∫P·dt). Stdlib only. |
 | **Artifacts** | `hil.artifacts` | **File-based captures** for high-volume devices (logic analyzers): a `CaptureArtifact` (path + metadata, never bulk bytes in memory) and a TTL-managed `ArtifactSpool` with retain/cleanup and NDJSON sidecars. Stdlib only. |
 | **Errors** | `hil.errors` | A typed hierarchy where every message is *agent-actionable*: what failed, why, and the next step. |
-| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + `capture`, `repeat` (loop), `logic` and `decode` steps + reports. Safety-first, and it runs with **zero hardware**. |
+| **Bench** | `hil.bench` | Declarative test **procedures** + a deterministic **simulator** + assertions + `capture`, `repeat` (loop), `logic`, `decode`, and `build` / `flash` / `debug` steps + reports. Safety-first, and it runs with **zero hardware**. |
 | **Interface** | `hil.cli` | An agent-first CLI — every command emits stable `--json` with meaningful exit codes, including `hil log` and `hil analyze`. |
 
 ## Built to be driven by AI
@@ -261,6 +262,77 @@ backend), so you can develop and CI the whole flow before a device is attached.
 See `examples/bench/atk-logic-i2c-decode.yaml`, and `docs/logic-daemon-protocol.md`
 for the daemon's JSON-RPC contract, cross-platform packaging and phasing.
 
+### Flashing & on-chip debug (probe-rs · pyOCD · OpenOCD · esptool · stlink)
+
+Flashing and debugging a microcontroller is the core hardware-in-the-loop loop:
+**build** firmware, **flash** it, then **halt / step / read memory / watch RTT** to
+prove it behaves. None of those tools speak SCPI and several are GPL, so HIL keeps
+them **out of process**, behind the same `Instrument` interface (`driver: debug`,
+address `debug://BACKEND?target=CHIP`) — safety policy, bench, simulator and `--json`
+all work unchanged:
+
+```python
+from hil import connect
+tgt = connect("debug://simulator", device_slug="generic-cortex-m")  # no probe needed
+print(tgt.query(":PROBE?"))                     # '1 probe(s): ...'
+tgt.write(":FLASH build/app.elf")               # program + verify + record the hash
+tgt.write(":HALT"); print(tgt.query(":STAT?"))  # 'halted'
+tgt.write(":MEM:ADDR 0x40000000")
+print(tgt.query(":MEM:READ?"))                  # '0x71'  (WHO_AM_I)
+tgt.write(":STEP")
+log = tgt.rtt(duration_s=5)                     # SEGGER RTT -> {'path', 'line_count'}
+```
+
+`debug://auto?target=CHIP` picks the tool by chip family (**ESP → esptool**,
+**STM32 → stlink**, everything else → **probe-rs**), or name one explicitly
+(`debug://probe-rs`, `debug://openocd`, `debug://pyocd`, `debug://esptool`,
+`debug://stlink`). probe-rs is the default because it's MIT/Apache; the GPL tools
+(OpenOCD, esptool) and BSD stlink are invoked strictly as **subprocesses**, so
+nothing copyleft links into HIL. A missing tool raises an actionable error naming
+the exact `hil setup <tool>` to run.
+
+The imperative CLI mirrors the facade — every verb also takes `--json`, and `--sim`
+runs the whole surface on the in-memory target with no probe attached:
+
+```bash
+hil debug probe --sim                         # list attached debug probes
+hil debug flash --sim build/app.elf --chip nrf52840 --offset 0x08000000
+hil debug reset --sim --halt                  # reset and halt at the entry point
+hil debug read  --sim --mem 0x40000000        # read a word of memory
+hil debug read  --sim --reg pc                # read a core register
+hil debug step  --sim                         # single-step one instruction
+hil debug rtt   --sim --seconds 5 --out rtt.log
+hil debug gdb   --sim verify.gdb --out gdb.log
+```
+
+In a procedure, `build`, `flash` and `debug` steps chain the full
+`build → flash → debug/run → capture → assert → report` pipeline and record
+firmware / flash / RTT / GDB **artifacts** in the run report — and the whole flow
+runs with **zero hardware** on the simulator backend:
+
+```yaml
+device: generic-cortex-m
+variables: {whoami: 0x40000000}
+steps:
+  - build:  {artifact: build/app.elf, version: 3.1.4, save_as: fw}   # add command: to compile
+  - flash:  {firmware: "${fw}", chip: nrf52840, verify: true, save_as: sha}
+  - debug:  {action: reset, halt: true}
+  - debug:  {action: read-mem, address: "${whoami}", match: "0x71"}
+  - debug:  {action: step}
+  - debug:  {action: read-reg, register: pc, save_as: pc}
+  - debug:  {action: rtt, duration_s: 5, match: "wifi_connected", save_as: bootlog}
+  - debug:  {action: gdb, script: verify.gdb, save_as: gdbout}
+  - assert: {that: sha, op: ne, value: "", message: "firmware hash recorded"}
+```
+
+See `examples/bench/cortex-m-flash-debug.yaml` for a runnable version of this pipeline.
+
+> **One instrument per procedure.** The runner drives a single target, so a
+> flash-then-debug sequence is fully covered. Orchestrating *several* instruments at
+> once — an SMU powering the DUT while a probe flashes it and a logic analyzer
+> watches I²C (PRD Appendix D) — isn't wired into one procedure yet; sequence those
+> as separate runs or drive them from Python.
+
 ## Optional device backends — `hil setup`
 
 Most of HIL works the moment you install it. A few devices need an *optional*
@@ -363,12 +435,12 @@ files `long_running: true` to keep them out of the fast bundled-example CI run.
 HIL ships with a **reference library of 725 instruments across 7 vendors** — roughly
 **294,000 SCPI commands** (83k queries · 211k setters) spanning 17 categories:
 oscilloscopes, SMUs, power sources, meters, RF, DAQ, electronic loads and e-fuses.
-Five profiles are hand-curated with safety policies and load by default; the full
+Eight profiles are hand-curated with safety policies and load by default; the full
 corpus is a versioned dataset under `data/` that you can add to the registry.
 
 ### Every instrument, by brand and type
 
-Model numbers only — grouped by manufacturer, then instrument type. The six
+Model numbers only — grouped by manufacturer, then instrument type. The eight
 hand-curated profiles load by default with safety policies:
 
 | Slug | Instrument | Type | Driver |
@@ -379,6 +451,8 @@ hand-curated profiles load by default with safety policies:
 | `ea-el9000b` | EA EL9000B | DC power supply | `scpi` |
 | `nordic-ppk2` | Nordic Power Profiler Kit II | Power profiler (non-SCPI) | `ppk2` |
 | `alientek-atk-logic` | ALIENTEK ATK-Logic | Logic analyzer (non-SCPI, daemon) | `logic` |
+| `generic-cortex-m` | Generic Cortex-M dev board | MCU flash/debug target (non-SCPI) | `debug` |
+| `esp32-devkit` | Espressif ESP32 DevKit | MCU flash/debug target (non-SCPI) | `debug` |
 
 The rest of the corpus lives in the versioned dataset under `data/`.
 
@@ -714,7 +788,8 @@ backend, GPLv2), `.[all]`, `.[dev]`. Python 3.10+. Core requires only PyYAML.
 ## Status
 
 **v0.1.0** — transports, SCPI layer, a pluggable instrument/driver registry (with
-non-SCPI PPK2 and logic-analyzer drivers), telemetry (logging + analytics), bench,
-on-demand backend provisioning (`hil setup`), and CLI are live and tested. The MCP
-server and a PyPI release as `hil-harness` are next.
+non-SCPI PPK2, logic-analyzer and flash/debug drivers), telemetry (logging +
+analytics), bench (incl. `build` / `flash` / `debug` steps), on-demand backend
+provisioning (`hil setup`), and CLI are live and tested. The MCP server and a PyPI
+release as `hil-harness` are next.
 MIT licensed.

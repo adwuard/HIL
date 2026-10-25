@@ -1,0 +1,74 @@
+slug: esp32-devkit
+manufacturer: Espressif
+model: ESP32 DevKit
+category: mcu-debug-target
+driver: debug                   # non-SCPI: routed to hil.drivers.debug
+description: >
+  Espressif ESP32 (Xtensa) — flashed and inspected over its ROM serial
+  bootloader with esptool, not SWD. HIL routes debug://auto?target=esp32 to the
+  esptool backend for write_flash / erase_flash / run / chip-id behind the same
+  pseudo-SCPI facade as the Cortex-M target. Boot mode needs GPIO0 held low
+  through an EN/reset pulse (or a --sim dry-run with no board attached).
+interfaces: [uart, usb-serial]
+connection_examples:
+  - debug://simulator                       # in-memory target, no board needed
+  - debug://auto?target=esp32               # route by chip family (-> esptool)
+  - debug://esptool?target=esp32&probe=/dev/cu.usb-0001
+  - debug://esptool?chip=esp32s3&probe=COM5
+capabilities:
+  - debug-flash
+  - debug-control
+  - debug-probe
+safety:
+  # Informational envelope; esptool addresses the flash map directly.
+  limits:
+    flash_offset: 0x0..0x400000
+    bootloader_offset: 0x1000
+commands:
+  - name: identity
+    syntax: '*IDN?'
+    query: true
+    description: 'Vendor,chip,probe,firmware — parsed by the registry.'
+  - name: target-info
+    syntax: ':TARG?'
+    query: true
+    description: Chip, core, run state and active tool (alias :TARGET?).
+  - name: state
+    syntax: ':STAT?'
+    query: true
+    description: Current core state — running | halted | unknown.
+  - name: firmware
+    syntax: ':FW?'
+    query: true
+    description: Firmware version / flashed status of the running image.
+  - name: flash
+    syntax: ':FLASH <path>'
+    description: esptool write_flash a firmware image; offset comes from the URL.
+    subsystem: FLASH
+    parameters: '<path> .bin image; --offset/target set the address and chip'
+  - name: erase
+    syntax: ':ERASE'
+    description: esptool erase_flash (chip mass-erase).
+  - name: reset
+    syntax: ':RESET'
+    description: Reset / run the target (alias *RST).
+  - name: resume
+    syntax: ':RESUME'
+    description: Release the core to run (alias :RUN).
+  - name: halt
+    syntax: ':HALT'
+    description: Halt the core where the backend supports it.
+  - name: read-mem
+    syntax: ':MEM:READ?'
+    query: true
+    description: Read one word at the current address (best-effort via esptool).
+    subsystem: MEMory
+  - name: set-mem-address
+    syntax: ':MEM:ADDR <addr>'
+    description: Set the memory pointer used by :MEM:READ? / :MEM:WRITE.
+    parameters: '<addr> hex or decimal, e.g. 0x3FF40000'
+  - name: gdb
+    syntax: ':GDB <script>'
+    description: Run a GDB batch script against an OpenOCD-ESP32 GDB server.
+    subsystem: DEBUG
+    parameters: '<script> path to a GDB command file'

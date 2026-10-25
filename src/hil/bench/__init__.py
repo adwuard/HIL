@@ -139,6 +139,25 @@ def build_instrument_factory(
 
         return logic_factory
 
+    # A build/flash/debug procedure simulates on an in-memory target (which
+    # spools RTT/GDB logs to a throwaway dir) instead of the SCPI simulator.
+    wants_debug = driver == "debug" or any(
+        getattr(s, "type", "") in ("build", "flash", "debug") for s in proc.steps
+    )
+    if wants_debug:
+        import tempfile
+
+        from ..artifacts import ArtifactSpool
+        from ..drivers.debug import DebugInstrument, DebugSimBackend
+
+        def debug_factory():
+            spool = ArtifactSpool(tempfile.mkdtemp(prefix="hil-debug-sim-"))
+            return DebugInstrument(
+                DebugSimBackend(spool=spool), device=device, timeout=timeout, spool=spool
+            )
+
+        return debug_factory
+
     def factory() -> ScpiInstrument:
         transport = SimTransport(
             responses=proc.sim.responses,

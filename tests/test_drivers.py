@@ -50,8 +50,9 @@ class FakeBackend:
 
 def test_driver_registry_has_builtins():
     names = available_drivers()
-    assert "scpi" in names and "ppk2" in names
+    assert {"scpi", "ppk2", "logic", "debug"} <= set(names)
     assert callable(get_driver("scpi")) and callable(get_driver("ppk2"))
+    assert callable(get_driver("logic")) and callable(get_driver("debug"))
 
 
 def test_driver_registry_rejects_unknown():

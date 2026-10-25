@@ -1,0 +1,63 @@
+# Provisioning recipe: probe-rs — the default on-chip debug/flash backend.
+#
+# The debug driver (hil.drivers.debug) shells out to external tools so HIL's MIT
+# core never links a copyleft debugger. probe-rs (Rust; MIT OR Apache-2.0) is the
+# license-compatible default for Cortex-M flash/erase/reset/RTT and is the recipe
+# `driver: debug` resolves to (hil setup debug / recipe_for(driver="debug")).
+#
+#   hil setup probe-rs --dry-run   # print the plan (rust toolchain + cargo build)
+#   hil setup probe-rs --yes       # install rust (privileged) + build probe-rs-tools
+slug: probe-rs
+driver: debug                   # the canonical backend the debug driver resolves to
+description: >
+  probe-rs — a Rust toolkit for on-chip debug/flash of Cortex-M (and RISC-V) over
+  CMSIS-DAP / ST-Link / J-Link. Provides `probe-rs download/erase/attach` and RTT.
+  MIT OR Apache-2.0, so it is HIL's default debug backend (no license friction).
+license: MIT OR Apache-2.0
+homepage: https://probe.rs
+
+# Ready when the `probe-rs` binary is on PATH.
+detect:
+  - binary: probe-rs
+
+steps:
+  - id: rust-toolchain
+    name: Install the Rust toolchain (cargo) used to build probe-rs
+    privileged: true          # system package -> gated behind --yes
+    optional: true            # skip cleanly if the user manages rustup themselves
+    system:
+      macos:
+        brew: [rust]
+      linux:
+        apt-get: [cargo, rustc]
+        dnf: [cargo, rustc]
+        pacman: [rust]
+      windows:
+        choco: [rust-ms]
+
+  - id: cargo-install
+    name: Build/install probe-rs-tools (prebuilt via binstall, else compile)
+    heavy: true               # a source compile is long -> never implicit in auto mode
+    optional: true            # warn (not abort) if cargo is still absent
+    shell:
+      default: >
+        export PATH="$HOME/.cargo/bin:$PATH";
+        if command -v cargo >/dev/null 2>&1; then
+          { command -v cargo-binstall >/dev/null 2>&1 && cargo binstall -y probe-rs-tools; } ||
+          cargo install probe-rs-tools --locked;
+        else
+          echo "cargo not found — install Rust first (macOS: brew install rust; Linux: apt install cargo rustc), then re-run: hil setup probe-rs";
+          exit 1;
+        fi
+
+verify:
+  - binary: probe-rs
+
+notes: >
+  probe-rs is the default backend for debug://auto on Cortex-M targets. macOS needs
+  no driver; Linux needs udev rules for non-root probe access (write
+  /etc/udev/rules.d/60-probe-rs.rules for your probe's VID:PID, then
+  `sudo udevadm control --reload && sudo udevadm trigger`); Windows needs the WinUSB
+  driver (Zadig). Alternative debug backends ship as their own recipes —
+  `hil setup openocd` (GPL-2.0), `hil setup esptool` (ESP32), `hil setup stlink`
+  (STM32), `hil setup pyocd`, and `hil setup debug-gdb` for GDB batch scripts.

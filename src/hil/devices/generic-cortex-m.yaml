@@ -1,0 +1,116 @@
+slug: generic-cortex-m
+manufacturer: Generic
+model: Cortex-M Dev Board
+category: mcu-debug-target
+driver: debug                   # non-SCPI: routed to hil.drivers.debug
+description: >
+  A generic ARM Cortex-M development target (e.g. nRF52840 / STM32 / RP2040)
+  reached over SWD/JTAG with an on-chip debug probe (CMSIS-DAP, ST-Link,
+  J-Link). Not SCPI: HIL drives flash + on-chip debug through external
+  tools — probe-rs (default), pyOCD, OpenOCD or stlink — behind a small
+  pseudo-SCPI facade so it reuses the safety policy, bench and CLI. The
+  zero-hardware simulator backend (debug://simulator) exercises the whole
+  surface with no probe attached.
+interfaces: [swd, jtag]
+connection_examples:
+  - debug://simulator                       # in-memory target, no probe needed
+  - debug://auto?target=nrf52840            # route by chip family (-> probe-rs)
+  - debug://probe-rs?target=nrf52840&transport=swd
+  - debug://openocd?target=stm32f4x&interface=stlink
+  - debug://pyocd?target=cortex_m
+capabilities:
+  - debug-probe
+  - debug-flash
+  - debug-control
+  - debug-rtt
+safety:
+  # Informational envelope for the flash/debug facade. Mass-erase and flash are
+  # destructive but legitimate; keep writes inside the target's address map.
+  limits:
+    flash_address: 0x08000000..0x080FFFFF
+    ram_address: 0x20000000..0x2003FFFF
+    access_width: 8 | 16 | 32 bit
+commands:
+  # -- identity / state --------------------------------------------------
+  - name: identity
+    syntax: '*IDN?'
+    query: true
+    description: 'Vendor,chip,probe,firmware — parsed by the registry.'
+  - name: probe-list
+    syntax: ':PROBE?'
+    query: true
+    description: List attached on-chip debug probes (id/vendor/serial/transport).
+    subsystem: PROBe
+  - name: target-info
+    syntax: ':TARG?'
+    query: true
+    description: Chip, core, run state and active tool (alias :TARGET?).
+  - name: state
+    syntax: ':STAT?'
+    query: true
+    description: Current core state — running | halted | unknown.
+  - name: firmware
+    syntax: ':FW?'
+    query: true
+    description: Firmware version / flashed status of the running image.
+  # -- memory / registers ------------------------------------------------
+  - name: set-mem-address
+    syntax: ':MEM:ADDR <addr>'
+    description: Set the memory pointer used by :MEM:WRITE / :MEM:READ?.
+    subsystem: MEMory
+    parameters: '<addr> hex or decimal, e.g. 0x20000000'
+  - name: set-mem-width
+    syntax: ':MEM:WIDTH <bits>'
+    description: Access width for subsequent memory operations.
+    parameters: '<bits> = 8 | 16 | 32'
+  - name: write-mem
+    syntax: ':MEM:WRITE <v1,v2,...>'
+    description: Write value(s) at the current address/width.
+    parameters: '<v1,v2,...> comma/space-separated hex or decimal words'
+  - name: read-mem
+    syntax: ':MEM:READ?'
+    query: true
+    description: Read one word at the current address/width.
+  - name: select-register
+    syntax: ':REG:SEL <name>'
+    description: Select the core register used by :REG:WRITE / :REG:READ?.
+    subsystem: REGister
+    parameters: '<name> = pc | sp | lr | xpsr | r0..r12'
+  - name: write-reg
+    syntax: ':REG:WRITE <value>'
+    description: Write the selected register.
+  - name: read-reg
+    syntax: ':REG:READ?'
+    query: true
+    description: Read the selected register as hex.
+  # -- run control -------------------------------------------------------
+  - name: halt
+    syntax: ':HALT'
+    description: Halt the core.
+    subsystem: RUN
+  - name: resume
+    syntax: ':RESUME'
+    description: Resume/run the core (alias :RUN).
+  - name: step
+    syntax: ':STEP'
+    description: Single-step one instruction.
+  - name: reset
+    syntax: ':RESET'
+    description: Reset the target (alias *RST).
+  # -- flash / debug channels -------------------------------------------
+  - name: flash
+    syntax: ':FLASH <path>'
+    description: Program a firmware image (.bin/.hex/.elf), verify, record hash.
+    subsystem: FLASH
+    parameters: '<path> firmware image; chip/address come from the target URL'
+  - name: erase
+    syntax: ':ERASE'
+    description: Erase target flash (mass-erase where the tool supports it).
+  - name: rtt
+    syntax: ':RTT [seconds]'
+    description: Stream SEGGER RTT output for a few seconds to a log artifact.
+    parameters: '[seconds] capture duration (default 5)'
+  - name: gdb
+    syntax: ':GDB <script>'
+    description: Run a GDB batch script (-x) against the target; captures output.
+    parameters: '<script> path to a GDB command file'

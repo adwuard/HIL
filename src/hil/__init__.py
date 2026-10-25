@@ -116,6 +116,8 @@ def connect(
         driver = "ppk2"
     elif addr.scheme == "logic":
         driver = "logic"
+    elif addr.scheme == "debug":
+        driver = "debug"
 
     slug = device_slug or (device.slug if device is not None else "")
     _ensure_backend(driver, slug)

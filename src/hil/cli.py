@@ -9,6 +9,8 @@
     hil analyze run.ndjson                    # summarize a capture
     hil doctor                                # env + backend availability
     hil setup [target] [--dry-run|--yes]      # fetch/build device backends on demand
+    hil debug probe debug://probe-rs          # list attached on-chip debug probes
+    hil debug flash debug://auto?target=esp32 fw.bin   # flash firmware (routes by chip)
 """
 
 from __future__ import annotations
@@ -76,6 +78,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_scrape_parser(sub, sub_common)
     _add_bench_parser(sub, sub_common)
     _add_telemetry_parsers(sub, sub_common)
+    _add_debug_parser(sub, sub_common)
 
     sub.add_parser("doctor", help="environment and backend availability", parents=[sub_common])
 
@@ -263,6 +266,84 @@ def _add_telemetry_parsers(
     )
     ap.add_argument("file", help="capture file (.ndjson/.jsonl/.csv)")
     ap.add_argument("--md", action="store_true", help="print a Markdown table")
+
+
+def _add_debug_parser(
+    sub: argparse._SubParsersAction, sub_common: argparse.ArgumentParser
+) -> None:
+    """`hil debug {probe,info,flash,erase,reset,halt,resume,step,read,write,gdb,rtt}`.
+
+    The imperative face of the flash/debug driver (the bench ``flash``/``debug``
+    steps are the declarative face). ``address`` is a ``debug://`` target or a
+    device slug; ``--sim`` runs on the in-memory simulator with no probe attached.
+    """
+    p = sub.add_parser(
+        "debug",
+        help="flash + on-chip debug (probe-rs/openocd/esptool/stlink/pyocd)",
+        parents=[sub_common],
+    )
+    dsub = p.add_subparsers(dest="debug_cmd", required=True)
+
+    def target_arg(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument(
+            "address", nargs="?", default="",
+            help="debug://BACKEND[?target=chip&probe=id] or a device slug",
+        )
+        sp.add_argument("--device", help="slug for safety policy when using a raw address")
+        sp.add_argument("--sim", action="store_true",
+                        help="run on the in-memory simulator target (no probe needed)")
+
+    sp = dsub.add_parser("probe", help="list attached debug probes", parents=[sub_common])
+    target_arg(sp)
+    sp = dsub.add_parser("info", help="show target chip/core/state", parents=[sub_common])
+    target_arg(sp)
+
+    sp = dsub.add_parser("flash", help="program firmware onto the target", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("firmware", help="firmware image (.bin/.hex/.elf)")
+    sp.add_argument("--chip", help="chip/target name (e.g. nrf52840, stm32f4x, esp32)")
+    sp.add_argument("--offset", help="flash address (e.g. 0x08000000); tool default if omitted")
+    sp.add_argument("--no-verify", action="store_true", help="skip read-back verify")
+    sp.add_argument("--erase", action="store_true", help="mass-erase before programming")
+
+    sp = dsub.add_parser("erase", help="erase target flash", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("--chip", help="chip/target name")
+
+    sp = dsub.add_parser("reset", help="reset (and optionally halt) the target", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("--halt", action="store_true", help="halt after reset")
+
+    for name, hlp in (("halt", "halt the core"), ("resume", "resume/run the core"),
+                      ("step", "single-step one instruction")):
+        sp = dsub.add_parser(name, help=hlp, parents=[sub_common])
+        target_arg(sp)
+
+    sp = dsub.add_parser("read", help="read memory or a register", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("--mem", help="memory address (e.g. 0x40000000)")
+    sp.add_argument("--reg", help="register name (e.g. pc, sp, r0)")
+    sp.add_argument("--width", type=int, default=32, choices=(8, 16, 32),
+                    help="access width in bits (default 32)")
+    sp.add_argument("--count", type=int, default=1, help="words to read (default 1)")
+
+    sp = dsub.add_parser("write", help="write memory or a register", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("--mem", help="memory address (e.g. 0x20000000)")
+    sp.add_argument("--reg", help="register name (e.g. r0)")
+    sp.add_argument("--value", nargs="+", required=True, help="value(s) to write (hex/dec)")
+    sp.add_argument("--width", type=int, default=32, choices=(8, 16, 32),
+                    help="access width in bits (default 32)")
+
+    sp = dsub.add_parser("gdb", help="run a GDB batch script against the target", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("script", help="GDB command script (passed as -x)")
+    sp.add_argument("--out", help="write GDB output to this file")
+
+    sp = dsub.add_parser("rtt", help="stream SEGGER RTT output for a few seconds", parents=[sub_common])
+    target_arg(sp)
+    sp.add_argument("--seconds", type=float, default=5.0, help="capture duration (default 5)")
+    sp.add_argument("--out", help="write the RTT log to this file (default: spool)")
 
 
 # -- output helpers -----------------------------------------------------------
@@ -609,6 +690,99 @@ def cmd_bench(args: argparse.Namespace) -> int:
     return 0 if report.ok else 1
 
 
+def _debug_dispatch(action: str, args: argparse.Namespace, inst) -> tuple[dict, str]:
+    """Run one ``hil debug`` action; return a ``(payload, human)`` pair."""
+    if action == "probe":
+        probes = inst.probe_list()
+        lines = [f"{len(probes)} probe(s)" + (":" if probes else "")]
+        lines += [f"  {p.get('name') or p.get('id') or p}" for p in probes]
+        return {"ok": True, "probes": probes}, "\n".join(lines)
+
+    if action == "info":
+        info = inst.target_info()
+        return {"ok": True, **info}, "\n".join(f"{k}: {v}" for k, v in info.items()) or "no info"
+
+    if action == "flash":
+        res = inst.flash(args.firmware, chip=args.chip or "", address=args.offset,
+                         verify=not args.no_verify, erase=args.erase)
+        human = (f"flashed {args.firmware} via {res.get('tool')} "
+                 f"sha256={str(res.get('sha256', ''))[:12]} verified={res.get('verified')} "
+                 f"size={res.get('size_bytes')} in {res.get('duration_s')}s")
+        return {"ok": bool(res.get("ok", True)), **res}, human
+
+    if action == "erase":
+        res = inst.erase(chip=args.chip or "")
+        return {"ok": bool(res.get("ok", True)), **res}, \
+            f"erased via {res.get('tool')} ok={res.get('ok')}"
+
+    if action == "reset":
+        res = inst.reset(halt=args.halt)
+        return {"ok": True, **res}, f"reset -> state={res.get('state')}"
+
+    if action == "halt":
+        res = inst.halt()
+        return {"ok": True, **res}, f"state={res.get('state')} pc={res.get('pc', '')}"
+
+    if action in ("resume", "run"):
+        res = inst.resume()
+        return {"ok": True, **res}, f"state={res.get('state')}"
+
+    if action == "step":
+        res = inst.step()
+        return {"ok": True, **res}, f"stepped -> pc={res.get('pc', '')}"
+
+    if action == "read":
+        if args.reg:
+            val = inst.read_reg(args.reg)
+            return {"ok": True, "register": args.reg, "value": val, "hex": hex(int(val))}, \
+                f"{args.reg} = {hex(int(val))}"
+        if args.mem:
+            words = inst.read_mem(args.mem, args.width, args.count)
+            return {"ok": True, "address": args.mem, "width": args.width,
+                    "count": args.count, "values": words, "hex": [hex(w) for w in words]}, \
+                f"{args.mem}: " + " ".join(hex(w) for w in words)
+        raise HilError("hil debug read: pass --mem ADDR or --reg NAME")
+
+    if action == "write":
+        if args.reg:
+            inst.write_reg(args.reg, args.value[0])
+            return {"ok": True, "register": args.reg, "value": args.value[0]}, \
+                f"{args.reg} <- {args.value[0]}"
+        if args.mem:
+            inst.write_mem(args.mem, args.value, args.width)
+            return {"ok": True, "address": args.mem, "value": args.value}, \
+                f"{args.mem} <- {', '.join(map(str, args.value))}"
+        raise HilError("hil debug write: pass --mem ADDR or --reg NAME")
+
+    if action == "gdb":
+        res = inst.gdb(args.script, out=args.out)
+        return {"ok": res.get("exit_code", 0) == 0, **res}, \
+            f"gdb exit={res.get('exit_code')}" + (f" -> {res.get('path')}" if res.get("path") else "")
+
+    if action == "rtt":
+        res = inst.rtt(args.seconds, out=args.out)
+        return {"ok": True, **res}, \
+            f"rtt {res.get('line_count', 0)} lines -> {res.get('path', '')}"
+
+    raise HilError(f"hil debug: unknown action '{action}'")
+
+
+def cmd_debug(args: argparse.Namespace) -> int:
+    target = "debug://simulator" if getattr(args, "sim", False) else (args.address or "")
+    if not target:
+        raise HilError(
+            "hil debug: pass an address (e.g. 'debug://probe-rs?target=nrf52840', "
+            "'debug://auto?target=esp32') or --sim for the in-memory simulator"
+        )
+    inst = connect(target, device_slug=getattr(args, "device", None), timeout=args.timeout)
+    try:
+        payload, human = _debug_dispatch(args.debug_cmd, args, inst)
+    finally:
+        inst.close()
+    _emit(args, payload, human)
+    return 0 if payload.get("ok", True) else 1
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     import platform
 
@@ -811,6 +985,7 @@ _COMMANDS = {
     "devices": cmd_devices,
     "scrape": cmd_scrape,
     "bench": cmd_bench,
+    "debug": cmd_debug,
     "log": cmd_log,
     "analyze": cmd_analyze,
     "doctor": cmd_doctor,

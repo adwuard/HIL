@@ -1,0 +1,32 @@
+# Provisioning recipe: pyOCD — Apache-2.0 Python debugger for Cortex-M.
+#
+# Permissive (Apache-2.0). Best-in-class for register/memory inspection and
+# single-stepping from Python; HIL routes debug://pyocd (and some auto targets)
+# to it. Installed as a separate package and run as a subprocess (`pyocd cmd`).
+#
+#   hil setup pyocd            # pip install (unprivileged)
+slug: pyocd
+description: >
+  pyOCD — Apache-2.0 Python debugger for Arm Cortex-M: flash/erase, memory and
+  register access, single-step, GDB server and RTT. hil.drivers.debug drives it
+  via `pyocd cmd -t <target> -c <halt|go|step|read32|write32|reg>`. Pure-Python.
+license: Apache-2.0
+homepage: https://pyocd.io
+
+# Ready when the pyocd package imports (pip provides the `pyocd` CLI).
+detect:
+  - python_import: pyocd
+
+steps:
+  - id: pip-pyocd
+    name: Install pyOCD from PyPI
+    pip:
+      packages: [pyocd]
+
+verify:
+  - python_import: pyocd
+
+notes: >
+  Permissive (Apache-2.0). Reachable via `hil setup pyocd` then
+  debug://pyocd?target=cortex_m. pyOCD fetches per-device debug "packs" on first
+  connect for some targets; that download is normal and cached under ~/.local.

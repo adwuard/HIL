@@ -1,0 +1,39 @@
+# Provisioning recipe: stlink-org tools — STM32 flash/debug over ST-Link.
+#
+# BSD-3-Clause (permissive). HIL uses st-flash for write/erase and st-info --probe
+# to enumerate ST-Link probes when a target routes to the stlink backend.
+#
+#   hil setup stlink --yes     # install from the system package manager
+slug: stlink
+description: >
+  stlink-org tools — BSD-3-Clause st-flash / st-info / st-util for STM32 over
+  ST-Link. hil.drivers.debug uses st-flash write/erase and st-info --probe for the
+  stlink backend (debug://stlink?target=stm32f4x). Permissive license.
+license: BSD-3-Clause
+homepage: https://github.com/stlink-org/stlink
+
+# Ready when st-flash (the write/erase CLI) is on PATH.
+detect:
+  - binary: st-flash
+
+steps:
+  - id: system-stlink
+    name: Install the stlink tools from the system package manager
+    system:
+      macos:
+        brew: [stlink]
+      linux:
+        apt-get: [stlink-tools]
+        dnf: [stlink-tools]
+        pacman: [stlink]
+      windows:
+        choco: [stlink]
+
+verify:
+  - binary: st-flash
+
+notes: >
+  Package names differ by distro: Debian/Ubuntu ship st-flash in `stlink-tools`.
+  STM32CubeProgrammer (ST SLA0048, free but non-OSI) is an alternative the harness
+  does not bundle — install ST's official CLI yourself if you prefer it. Reachable
+  via `hil setup stlink` then debug://stlink?target=stm32f4x.

@@ -4,8 +4,8 @@ A *driver* is a factory ``(addr, device, timeout) -> Instrument``. The registry
 maps a name to a factory so ``connect()`` can build the right instrument from an
 address scheme or a device profile's ``driver:`` field.
 
-Built-ins: ``scpi`` (default), ``ppk2`` and ``logic``. Third parties register more
-**without editing HIL** via the ``hil.drivers`` entry-point group::
+Built-ins: ``scpi`` (default), ``ppk2``, ``logic`` and ``debug``. Third parties
+register more **without editing HIL** via the ``hil.drivers`` entry-point group::
 
     # in your package's pyproject.toml
     [project.entry-points."hil.drivers"]
@@ -24,7 +24,7 @@ DriverFactory = Callable[..., Any]
 
 _DRIVERS: dict[str, DriverFactory] = {}
 _DISCOVERED = False
-_BUILTIN = ("scpi", "ppk2", "logic")
+_BUILTIN = ("scpi", "ppk2", "logic", "debug")
 
 
 def register_driver(name: str, factory: DriverFactory) -> None:
@@ -42,6 +42,9 @@ def _load_builtin(name: str) -> None:
     elif name == "logic":
         from .logic import logic_driver
         register_driver("logic", logic_driver)
+    elif name == "debug":
+        from .debug import debug_driver
+        register_driver("debug", debug_driver)
 
 
 def _discover() -> None:

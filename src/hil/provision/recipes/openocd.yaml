@@ -1,0 +1,39 @@
+# Provisioning recipe: OpenOCD — copyleft on-chip debug backend.
+#
+# GPL-2.0. HIL only ever launches `openocd` as a separate process (Tcl `-c`
+# commands: init/halt/mdw/mww/reg/program), so the MIT core never links it.
+# Reachable by exact slug — it deliberately carries no `driver:` so
+# recipe_for(driver="debug") keeps resolving to the license-compatible probe-rs.
+#
+#   hil setup openocd --yes      # install from the system package manager
+slug: openocd
+description: >
+  OpenOCD — GPL-2.0 open-source on-chip debug: GDB server, flash, and boundary
+  scan over ST-Link / J-Link / CMSIS-DAP / FTDI. hil.drivers.debug drives it for
+  mem/reg/step and `program <fw> verify reset exit` when probe-rs is not a fit.
+license: GPL-2.0-only
+homepage: https://openocd.org
+
+detect:
+  - binary: openocd
+
+steps:
+  - id: system-openocd
+    name: Install OpenOCD from the system package manager
+    system:
+      macos:
+        brew: [openocd]
+      linux:
+        apt-get: [openocd]
+        dnf: [openocd]
+        pacman: [openocd]
+      windows:
+        choco: [openocd]
+
+verify:
+  - binary: openocd
+
+notes: >
+  Copyleft (GPL-2.0): kept out-of-process so the MIT core stays clean. Use it via
+  `hil setup openocd` then debug://openocd?target=stm32f4x&interface=stlink. ESP32
+  has an official OpenOCD fork (openocd-esp32) — install that separately for ESP.

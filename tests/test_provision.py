@@ -151,6 +151,32 @@ def test_bundled_recipes_load_and_are_well_formed():
     assert any(s.action == "git" for s in atk.steps)      # clones the sources
 
 
+def test_debug_recipes_load_and_are_well_formed():
+    probe_rs = load_recipe_file(catalog.BUILTIN_RECIPES / "probe-rs.yaml")
+    assert probe_rs.slug == "probe-rs" and probe_rs.driver == "debug"
+    assert probe_rs.license.startswith("MIT")             # license-compatible default
+    cargo = next(s for s in probe_rs.steps if s.id == "cargo-install")
+    assert cargo.heavy and cargo.optional                 # long compile: never implicit
+    # Alternative backends are reachable by slug and carry NO driver, so
+    # recipe_for(driver='debug') keeps resolving to probe-rs (last-wins safe).
+    for slug, lic in (("openocd", "GPL-2.0"), ("esptool", "GPL-2.0"),
+                      ("stlink", "BSD-3"), ("pyocd", "Apache-2.0"),
+                      ("debug-gdb", "GPL-3.0")):
+        r = load_recipe_file(catalog.BUILTIN_RECIPES / f"{slug}.yaml")
+        assert r.slug == slug and r.driver == "" and r.license.startswith(lic)
+        assert r.detect and r.verify                      # every recipe can be checked
+    # esptool/pyocd are pure-Python (pip); openocd is a system package
+    assert any(s.action == "pip"
+               for s in load_recipe_file(catalog.BUILTIN_RECIPES / "esptool.yaml").steps)
+    assert any(s.action == "system"
+               for s in load_recipe_file(catalog.BUILTIN_RECIPES / "openocd.yaml").steps)
+
+
+def test_only_one_recipe_claims_the_debug_driver():
+    debug_recipes = [r.slug for r in catalog.load_recipes().values() if r.driver == "debug"]
+    assert debug_recipes == ["probe-rs"]                  # no driver->recipe ambiguity
+
+
 # =========================================================================
 # platform detection
 # =========================================================================
@@ -372,6 +398,9 @@ def test_split_hostport_bad_port():
 # =========================================================================
 def test_load_recipes_includes_bundled():
     assert {"ppk2", "alientek-atk-logic"} <= set(catalog.load_recipes())
+    # the flash/debug toolchain recipes ship alongside them
+    assert {"probe-rs", "openocd", "esptool", "stlink", "pyocd", "debug-gdb"} \
+        <= set(catalog.load_recipes())
 
 
 def test_resolve_targets_by_slug_driver_device_and_all():
@@ -392,6 +421,20 @@ def test_recipe_for_by_driver_and_device():
     assert catalog.recipe_for(driver="ppk2").slug == "ppk2"
     assert catalog.recipe_for(device_slug="nordic-ppk2").slug == "ppk2"
     assert catalog.recipe_for(driver="scpi") is None
+    # driver 'debug' resolves to the license-compatible default backend
+    assert catalog.recipe_for(driver="debug").slug == "probe-rs"
+    assert catalog.recipe_for(device_slug="generic-cortex-m").slug == "probe-rs"
+
+
+def test_resolve_targets_debug_tools_and_driver():
+    from hil.registry import load_registry
+    recipes, reg = catalog.load_recipes(), load_registry()
+    # each tool recipe is reachable by its own slug
+    for slug in ("probe-rs", "openocd", "esptool", "stlink", "pyocd", "debug-gdb"):
+        assert [r.slug for r in catalog.resolve_targets([slug], recipes=recipes, registry=reg)] == [slug]
+    # the driver name and a debug device both resolve to the default backend
+    assert [r.slug for r in catalog.resolve_targets(["debug"], recipes=recipes, registry=reg)] == ["probe-rs"]
+    assert [r.slug for r in catalog.resolve_targets(["generic-cortex-m"], recipes=recipes, registry=reg)] == ["probe-rs"]
 
 
 def test_work_root_env_override(monkeypatch, tmp_path):

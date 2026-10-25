@@ -9,7 +9,50 @@ logbook). The CLI exit code mirrors :attr:`RunReport.ok`.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+
+def _artifact_summary(a: dict[str, Any]) -> tuple[str, str]:
+    """A one-line ``(detail, path)`` summary for any artifact kind.
+
+    Covers the logic-analyzer kinds (``logic``/``decoded``) and the debug/flash
+    kinds (``firmware``/``flash``/``erase``/``rtt``/``gdb``) so both the human and
+    Markdown reports render a hardware-in-the-loop run.
+    """
+    kind = a.get("kind", "")
+    path = str(a.get("path", "") or "")
+    if kind == "decoded":
+        return f"{a.get('frames', 0)} frames", path
+    if kind == "logic":
+        detail = f"{a.get('sample_count', 0)} samples"
+        if a.get("sample_rate_hz"):
+            detail += f" @{a.get('sample_rate_hz')} Hz"
+        if a.get("channels"):
+            detail += f" ch={a.get('channels')}"
+        return detail, path
+    if kind == "firmware":
+        detail = f"sha256={str(a.get('sha256', ''))[:12]} size={a.get('size_bytes', 0)}"
+        if a.get("version"):
+            detail += f" v={a.get('version')}"
+        return detail, path
+    if kind == "flash":
+        fw = str(a.get("firmware", "") or "")
+        name = Path(fw).name if fw else ""
+        detail = (f"{a.get('tool', '')} {name} sha256={str(a.get('sha256', ''))[:12]} "
+                  f"verified={a.get('verified')}").strip()
+        return detail, path or fw
+    if kind == "erase":
+        return f"{a.get('tool', '')} mass={a.get('mass')} ok={a.get('ok')}", path
+    if kind == "rtt":
+        n = a.get("line_count")
+        if n is None:
+            lines = a.get("lines")
+            n = len(lines) if isinstance(lines, list) else 0
+        return f"{n or 0} lines", path
+    if kind == "gdb":
+        return f"exit={a.get('exit_code')}", path or str(a.get("script", ""))
+    return f"{a.get('sample_count', 0)} samples", path
 
 
 @dataclass
@@ -154,16 +197,10 @@ class RunReport:
                 + (f" -> {c['file']}" if c.get("file") else "")
             )
         for a in self.artifacts:
-            kind = a.get("kind", "")
-            if kind == "decoded":
-                detail = f"{a.get('frames', 0)} frames"
-            else:
-                detail = f"{a.get('sample_count', 0)} samples"
-                if a.get("sample_rate_hz"):
-                    detail += f" @{a.get('sample_rate_hz')} Hz"
-            lines.append(f"  artifact {kind}: {detail}")
-            if a.get("path"):
-                lines.append(f"        -> {a['path']}")
+            detail, path = _artifact_summary(a)
+            lines.append(f"  artifact {a.get('kind', '')}: {detail}")
+            if path:
+                lines.append(f"        -> {path}")
         return "\n".join(lines)
 
     def markdown(self) -> str:
@@ -208,14 +245,12 @@ class RunReport:
                 "",
                 "**Artifacts:**",
                 "",
-                "| kind | format | channels | samples/frames | rate (Hz) | path |",
-                "|---|---|--:|--:|--:|---|",
+                "| kind | detail | path |",
+                "|---|---|---|",
             ]
             for a in self.artifacts:
-                n = a.get("sample_count") if a.get("kind") != "decoded" else a.get("frames")
-                chans = a.get("channels") or ""
+                detail, path = _artifact_summary(a)
                 out.append(
-                    f"| `{a.get('kind', '')}` | {a.get('format', '')} | {chans} | {n or 0} "
-                    f"| {a.get('sample_rate_hz', '')} | `{a.get('path', '')}` |"
+                    f"| `{a.get('kind', '')}` | {detail.replace('|', '\\|')} | `{path}` |"
                 )
         return "\n".join(out)

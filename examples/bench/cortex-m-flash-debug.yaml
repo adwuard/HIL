@@ -1,0 +1,45 @@
+# Run:  hil bench run examples/bench/cortex-m-flash-debug.yaml
+# Dry-runs on the built-in simulator (no --address): an in-memory Cortex-M target
+# answers probe/flash/halt/step/memory/RTT/GDB, so the whole
+# build -> flash -> debug/run -> assert pipeline runs with no probe and no toolchain.
+#
+# To drive real hardware, point HIL at a debug probe:
+#   hil bench run examples/bench/cortex-m-flash-debug.yaml --address debug://auto?target=nrf52840
+#   hil bench run examples/bench/cortex-m-flash-debug.yaml --address debug://probe-rs?target=nrf52840
+# The flash/debug tools (probe-rs, pyOCD, OpenOCD, esptool, stlink) run strictly as
+# subprocesses, so GPL/native code never links into HIL. `hil setup <tool>` installs one.
+name: Cortex-M build, flash and on-chip debug
+description: >
+  Fingerprint a firmware image, program it, then halt at reset and check the core
+  over SWD/JTAG: read the WHO_AM_I word, single-step, watch RTT for a boot marker
+  and run a GDB batch script — recording firmware/flash/RTT/GDB artifacts.
+device: generic-cortex-m
+variables:
+  firmware: build/app.elf        # your CI-built image; fingerprinted as-is (add a
+                                 # `command:` to the build step to compile it here)
+  chip: nrf52840
+  whoami: 0x40000000             # WHO_AM_I word on the simulated target (reads 0x71)
+steps:
+  - log: "build + flash ${chip}, then verify over the debug probe"
+  - build:
+      artifact: ${firmware}
+      version: 3.1.4
+      save_as: fw                # fw = the built image path (build -> flash hand-off)
+  - flash:
+      firmware: "${fw}"
+      chip: ${chip}
+      verify: true
+      save_as: sha               # sha = flashed image hash
+  - debug: {action: probe}                        # list attached debug probes
+  - debug: {action: reset, halt: true}            # halt at the reset vector
+  - debug: {action: read-mem, address: "${whoami}", match: "0x71"}
+  - debug: {action: step}                         # single-step one instruction
+  - debug: {action: read-reg, register: pc, save_as: pc}
+  - debug:
+      action: rtt
+      duration_s: 5
+      match: "wifi_connected"   # boot marker on the RTT channel
+      save_as: bootlog
+  - debug: {action: gdb, script: verify.gdb, save_as: gdbout}
+  - assert: {that: sha, op: ne, value: "", message: "firmware hash recorded"}
+  - log: "halted at pc=${pc}; RTT log -> ${bootlog}"

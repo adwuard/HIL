@@ -19,6 +19,7 @@ Standard library only — no extra dependencies.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -39,6 +40,8 @@ _EXT = {
     "bin": ".bin",
     "json": ".json",
     "ndjson": ".ndjson",
+    "txt": ".txt",
+    "log": ".log",
 }
 
 
@@ -49,6 +52,37 @@ def _ext_for(fmt: str) -> str:
 def new_id(prefix: str = "cap") -> str:
     """A short, unique, filesystem-safe artifact id."""
     return f"{prefix}-{time.strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
+
+
+def fingerprint_firmware(path: str | Path, *, version: str = "", tool: str = "") -> dict[str, Any]:
+    """Hash + size a firmware image so a run records exactly what was flashed.
+
+    Returns a ``kind="firmware"`` artifact dict (``sha256``/``size_bytes`` plus
+    optional ``version``/``tool``). A missing file is *not* an error: it is
+    recorded with ``size_bytes`` 0 and a hash of its name, so a simulator or
+    dry-run still yields a stable fingerprint for the ``build`` -> ``flash``
+    hand-off (the run bundle's firmware identity, per the reproducible-archive
+    requirement).
+    """
+    p = Path(path)
+    if p.is_file():
+        data = p.read_bytes()
+        sha = hashlib.sha256(data).hexdigest()
+        size = len(data)
+    else:
+        sha = hashlib.sha256(str(path).encode("utf-8")).hexdigest()
+        size = 0
+    d: dict[str, Any] = {
+        "kind": "firmware",
+        "path": str(path),
+        "sha256": sha,
+        "size_bytes": size,
+    }
+    if version:
+        d["version"] = version
+    if tool:
+        d["tool"] = tool
+    return d
 
 
 @dataclass

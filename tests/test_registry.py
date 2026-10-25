@@ -29,6 +29,18 @@ def test_logic_analyzer_device_routes_to_logic_driver():
     assert ":FETCh?" in heads and ":DEC" in heads and ":ACQ:ARM" in heads
 
 
+def test_debug_target_devices_route_to_debug_driver():
+    devices = load_registry()
+    mcu = devices["generic-cortex-m"]
+    assert mcu.driver == "debug" and mcu.category == "mcu-debug-target"
+    assert {"debug-probe", "debug-flash", "debug-control", "debug-rtt"} <= set(mcu.capabilities)
+    esp = devices["esp32-devkit"]
+    assert esp.driver == "debug" and "debug-flash" in esp.capabilities
+    # the pseudo-SCPI facade verbs the debug driver answers are all declared
+    heads = {c.syntax.split()[0] for c in mcu.commands if c.syntax}
+    assert {":FLASH", ":HALT", ":MEM:READ?", ":REG:READ?", ":RTT", ":GDB"} <= heads
+
+
 def test_safety_blocked():
     devices = load_registry()
     smu = devices["keithley-2400"]

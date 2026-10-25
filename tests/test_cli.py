@@ -138,3 +138,91 @@ def test_scrape_all_offline_manifest(tmp_path, capsys, index_html, device_html):
     assert payload["devices_scraped"] == 1
     assert payload["catalog_count"] == 3
     assert (out / "manifest.json").exists()
+
+
+# -- hil debug (flash + on-chip debug on the in-memory simulator) -----------
+def test_debug_probe_sim(capsys):
+    code = main(["debug", "probe", "--sim", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True
+    assert len(payload["probes"]) == 1
+    assert payload["probes"][0]["transport"] == "swd"
+
+
+def test_debug_info_sim(capsys):
+    code = main(["debug", "info", "--sim", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True
+    assert payload["chip"] == "sim-target" and payload["core"] == "cortex-m4"
+    assert payload["state"] == "running"
+
+
+def test_debug_flash_sim(tmp_path, capsys):
+    fw = tmp_path / "app.bin"
+    fw.write_bytes(b"\x00\x01\x02\x03firmware")
+    code = main(["debug", "flash", "--sim", str(fw), "--chip", "nrf52840", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True
+    assert payload["kind"] == "flash" and payload["verified"] is True
+    assert payload["size_bytes"] == fw.stat().st_size and len(payload["sha256"]) == 64
+
+
+def test_debug_read_mem_and_reg_sim(capsys):
+    code = main(["debug", "read", "--sim", "--mem", "0x40000000", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["values"] == [0x71] and payload["hex"] == ["0x71"]
+
+    code = main(["debug", "read", "--sim", "--reg", "pc", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["register"] == "pc" and payload["hex"] == "0x8000150"
+
+
+def test_debug_write_then_read_mem_sim(capsys):
+    code = main(["debug", "write", "--sim", "--mem", "0x20000000", "--value", "0xDEADBEEF", "--json"])
+    assert code == 0 and json.loads(capsys.readouterr().out)["ok"] is True
+
+
+def test_debug_run_control_sim(capsys):
+    code = main(["debug", "halt", "--sim", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["state"] == "halted"
+    code = main(["debug", "resume", "--sim", "--json"])
+    assert json.loads(capsys.readouterr().out)["state"] == "running"
+
+
+def test_debug_rtt_writes_out_file(tmp_path, capsys):
+    out = tmp_path / "rtt.txt"
+    code = main(["debug", "rtt", "--sim", "--seconds", "0.02", "--out", str(out), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True
+    assert payload["line_count"] == 4 and payload["path"] == str(out)
+    assert "wifi_connected" in out.read_text(encoding="utf-8")
+
+
+def test_debug_gdb_sim(tmp_path, capsys):
+    script = tmp_path / "dump.gdb"
+    script.write_text("monitor reset halt\n", encoding="utf-8")
+    out = tmp_path / "gdb.log"
+    code = main(["debug", "gdb", "--sim", str(script), "--out", str(out), "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0 and payload["ok"] is True and payload["exit_code"] == 0
+
+
+def test_debug_read_without_selector_errors(capsys):
+    code = main(["debug", "read", "--sim", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1 and payload["ok"] is False
+    assert "--mem" in payload["error"] or "--reg" in payload["error"]
+
+
+def test_debug_requires_a_target(capsys):
+    code = main(["debug", "probe", "--json"])          # no address, no --sim
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1 and payload["ok"] is False
+    assert "debug://" in payload["error"]
+
+
+def test_debug_human_output(capsys):
+    code = main(["debug", "probe", "--sim"])
+    out = capsys.readouterr().out
+    assert code == 0 and "1 probe(s)" in out and "Simulated CMSIS-DAP" in out

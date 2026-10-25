@@ -7,6 +7,7 @@ Supported address forms:
     visa://VISA_RESOURCE              any VISA resource, e.g. visa://GPIB::24::INSTR
     ppk2://PORT                       Nordic Power Profiler Kit II (non-SCPI driver)
     logic://host[:port]               logic-analyzer capture daemon (default port 5555)
+    debug://BACKEND[?target=..&probe=..&transport=swd]   on-chip debugger (flash/SWD/JTAG)
     GPIB::24::INSTR                   bare VISA resource (auto-detected by '::')
 
 A bare word that is not an address (e.g. ``keithley-2400``) is treated as a
@@ -24,7 +25,7 @@ DEFAULT_SCPI_PORT = 5025
 DEFAULT_BAUD = 9600
 DEFAULT_LOGIC_PORT = 5555
 
-SUPPORTED_SCHEMES = ("tcp", "serial", "visa", "ppk2", "logic")
+SUPPORTED_SCHEMES = ("tcp", "serial", "visa", "ppk2", "logic", "debug")
 
 
 @dataclass(frozen=True)
@@ -32,7 +33,7 @@ class Address:
     """A parsed instrument address."""
 
     scheme: str
-    """Transport scheme: 'tcp', 'serial', 'visa', 'ppk2', or 'logic'."""
+    """Transport scheme: 'tcp', 'serial', 'visa', 'ppk2', 'logic', or 'debug'."""
 
     host: str = ""
     """Remote host (tcp)."""
@@ -51,6 +52,9 @@ class Address:
             return f"tcp://{self.host}:{self.port}"
         if self.scheme == "logic":
             return f"logic://{self.host}:{self.port}"
+        if self.scheme == "debug":
+            qs = "&".join(f"{k}={v}" for k, v in self.params.items())
+            return f"debug://{self.host}" + (f"?{qs}" if qs else "")
         if self.scheme == "serial":
             qs = "".join(f"&{k}={v}" for k, v in self.params.items())
             return f"serial://{self.path}{qs}"
@@ -105,6 +109,21 @@ def parse_address(raw: str) -> Address:
                 "Expected e.g. 'logic://127.0.0.1:5555'."
             )
         return Address(scheme="logic", host=host, port=parts.port or DEFAULT_LOGIC_PORT)
+
+    if scheme == "debug":
+        # debug://BACKEND[?target=chip&probe=id&transport=swd] — an on-chip debugger.
+        # The backend name (probe-rs, openocd, esptool, stlink, pyocd, simulator,
+        # auto) lives in the host slot; chip/probe/transport ride in query params.
+        parts = urlsplit(f"//{rest}", scheme="debug")
+        backend = (parts.hostname or "").lower()
+        if not backend:
+            raise AddressError(
+                f"Missing backend in debug address '{raw}'. Expected e.g. "
+                "'debug://simulator', 'debug://probe-rs?target=nrf52840', "
+                "'debug://openocd', 'debug://esptool' or 'debug://stlink'."
+            )
+        params = {k: v[-1] for k, v in parse_qs(parts.query).items()}
+        return Address(scheme="debug", host=backend, params=params)
 
     # serial:// and visa:// keep the remainder verbatim (minus query for serial)
     if scheme == "serial":

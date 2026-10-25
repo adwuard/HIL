@@ -1,0 +1,33 @@
+# Provisioning recipe: esptool — Espressif flash tool (ESP8266/ESP32).
+#
+# GPL-2.0, but installed as a separate Python package and run as a subprocess
+# (`esptool.py` / `esptool`), so the MIT core stays clean. This is the backend
+# HIL routes debug://auto?target=esp32 (and the esp32-devkit device) to.
+#
+#   hil setup esptool          # pip install (unprivileged)
+slug: esptool
+description: >
+  esptool — Espressif's GPL-2.0 flasher for ESP8266/ESP32 over the ROM serial
+  bootloader (write_flash / erase_flash / run / chip-id). Pure-Python (pip); no
+  compilation. The debug driver enumerates the serial port from ?probe=/dev/....
+license: GPL-2.0-only
+homepage: https://github.com/espressif/esptool
+
+# Ready when the esptool package imports (pip provides the esptool.py/esptool CLI).
+detect:
+  - python_import: esptool
+
+steps:
+  - id: pip-esptool
+    name: Install esptool from PyPI
+    pip:
+      packages: [esptool]
+
+verify:
+  - python_import: esptool
+
+notes: >
+  Enter the ROM bootloader by holding GPIO0 low through an EN/reset pulse (many
+  dev boards automate this via DTR/RTS). Use it via `hil setup esptool` then
+  debug://esptool?target=esp32&probe=/dev/cu.usb-0001. Tuya ESP-based modules may
+  prefer tyutool/tos.py — reuse that where the vendor flow requires it.

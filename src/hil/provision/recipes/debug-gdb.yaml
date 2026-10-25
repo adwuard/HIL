@@ -1,0 +1,45 @@
+# Provisioning recipe: a bare-metal GDB for the debug driver's :GDB batch mode.
+#
+# GPL-3.0. Only ever launched as a separate `gdb --batch -x script` process, so
+# the MIT core stays clean. The debug driver tries gdb-multiarch, then
+# arm-none-eabi-gdb, then gdb (see hil.drivers.debug._DEFAULT_GDB).
+#
+#   hil setup debug-gdb --yes   # install a multiarch / bare-metal GDB
+slug: debug-gdb
+description: >
+  A bare-metal GDB used by the debug driver's `:GDB <script>` batch mode (and the
+  bench `debug` step with action: gdb) to run automated break/step/print/dump
+  scripts against a target's GDB server. Tries gdb-multiarch, arm-none-eabi-gdb,
+  then gdb.
+license: GPL-3.0-or-later
+homepage: https://www.sourceware.org/gdb/
+
+# Ready when any of the candidate GDBs answers --version.
+detect:
+  - command:
+      shell: "gdb-multiarch --version || arm-none-eabi-gdb --version || gdb --version"
+    describe: "a bare-metal GDB (gdb-multiarch / arm-none-eabi-gdb / gdb) is on PATH"
+
+steps:
+  - id: system-gdb
+    name: Install a multiarch / bare-metal GDB
+    system:
+      macos:
+        brew: [arm-none-eabi-gdb]
+      linux:
+        apt-get: [gdb-multiarch]
+        dnf: [gdb]
+        pacman: [gdb]
+      windows:
+        choco: [gdb]
+
+verify:
+  - command:
+      shell: "gdb-multiarch --version || arm-none-eabi-gdb --version || gdb --version"
+    describe: "a bare-metal GDB (gdb-multiarch / arm-none-eabi-gdb / gdb) is on PATH"
+
+notes: >
+  GDB is GPL-3.0 and is only launched out-of-process (`--batch -x script`). On
+  macOS the arm-none-eabi-gdb formula may need code-signing before it will attach.
+  Point the driver at a specific GDB with debug://BACKEND?gdb=/path/to/gdb, or set
+  the `gdb` param on a bench `debug` step. Reachable via `hil setup debug-gdb`.
