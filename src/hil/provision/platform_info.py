@@ -14,6 +14,7 @@ single detection can be reused (and so tests can inject a fake).
 
 from __future__ import annotations
 
+import importlib.util
 import os
 import shutil
 import sys
@@ -36,7 +37,7 @@ _PKG_MANAGERS = (
 # Build / VCS tools a native recipe may need.
 _TOOLS = (
     "git", "make", "cmake", "ninja", "qmake", "qmake6",
-    "pkg-config", "gcc", "g++", "clang", "python3", "pip3",
+    "pkg-config", "gcc", "g++", "clang", "python3", "pip3", "uv",
 )
 
 
@@ -64,6 +65,9 @@ class Platform:
     arch: str = ""
     python: str = ""
     python_version: str = ""
+    # False in uv-managed virtualenvs (which ship no pip module); the engine then
+    # installs with `uv pip` instead of `python -m pip`, so a cold start works.
+    has_pip: bool = True
     is_64bit: bool = True
     package_managers: dict[str, str | None] = field(default_factory=dict)
     tools: dict[str, str | None] = field(default_factory=dict)
@@ -126,6 +130,7 @@ def detect(*, cross_target: str | None = None) -> Platform:
         arch=arch,
         python=sys.executable or "python3",
         python_version=".".join(str(p) for p in sys.version_info[:3]),
+        has_pip=importlib.util.find_spec("pip") is not None,
         is_64bit=sys.maxsize > 2**32,
         package_managers={m: shutil.which(m) for m in _PKG_MANAGERS},
         tools={t: shutil.which(t) for t in _TOOLS},

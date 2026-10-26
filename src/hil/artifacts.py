@@ -35,6 +35,7 @@ DEFAULT_SPOOL = ".hil-spool"
 # capture format -> file extension
 _EXT = {
     "srzip": ".srzip",
+    "atkdl": ".atkdl",
     "csv": ".csv",
     "raw": ".bin",
     "bin": ".bin",

@@ -29,6 +29,7 @@ import os
 import shutil
 import socket
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -266,10 +267,28 @@ class Provisioner:
         if not pkgs and extra:
             pkgs = [f"hil-harness[{extra}]"]
         index = str(step.pip.get("index_url", ""))
-        argv = [self.platform.python or "python3", "-m", "pip", "install", *pkgs]
+        argv = [*self._pip_installer(), *pkgs]
         if index:
             argv += ["--index-url", index]
         return " ".join(argv), argv
+
+    def _pip_installer(self) -> list[str]:
+        """The ``pip install`` argv prefix that works in *this* environment.
+
+        Normally ``<python> -m pip install``. uv-managed virtualenvs ship without
+        the pip module, so a cold start would die with "No module named pip";
+        when the target interpreter has no pip we fall back to
+        ``uv pip install --python <python>`` (installs into the same env, no pip
+        needed). Falls back to ``-m pip`` if neither is usable so the error the
+        user sees is still the familiar one.
+        """
+        py = self.platform.python or "python3"
+        if getattr(self.platform, "has_pip", True):
+            return [py, "-m", "pip", "install"]
+        uv = self.platform.tool("uv") or shutil.which("uv")
+        if uv:
+            return [uv, "pip", "install", "--python", py]
+        return [py, "-m", "pip", "install"]
 
     def _system_command(self, step: Step) -> tuple[str, list[str], bool] | None:
         mgrs = self.platform.pkg_managers_for_os()
@@ -390,27 +409,50 @@ class Provisioner:
         return cp.returncode, (cp.stderr or cp.stdout or "").strip()
 
     def _probe_daemon(self, address: str) -> tuple[bool, str]:
-        """Best-effort JSON-RPC ``hello`` against a capture daemon."""
+        """Best-effort JSON-RPC ``hello`` against a capture daemon.
+
+        Mirrors the client's framing tolerance (docs/logic-daemon-protocol.md):
+        a daemon may emit a non-JSON banner or unsolicited notifications, so skip
+        any line that is not JSON or whose ``id`` does not match our request and
+        keep reading until the ``hello`` reply arrives (bounded by a deadline).
+        """
         host, port = _split_hostport(address)
         if not host:
             return False, f"bad address '{address}'"
         try:
             with socket.create_connection((host, port), timeout=2.0) as sock:
-                sock.settimeout(2.0)
                 req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "hello"}) + "\n"
                 sock.sendall(req.encode())
                 buf = b""
-                while b"\n" not in buf:
-                    chunk = sock.recv(4096)
-                    if not chunk:
-                        break
-                    buf += chunk
-                line = buf.split(b"\n", 1)[0].decode("utf-8", "replace").strip()
-                msg = json.loads(line) if line else {}
-                if isinstance(msg, dict) and "result" in msg:
-                    dev = (msg["result"] or {}).get("device", {})
-                    return True, dev.get("model", "daemon reachable")
-                return False, "unexpected hello reply"
+                deadline = time.monotonic() + 2.0
+                while True:
+                    while b"\n" not in buf:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            return False, f"daemon at {host}:{port} did not answer 'hello'"
+                        sock.settimeout(remaining)
+                        chunk = sock.recv(4096)
+                        if not chunk:
+                            return False, f"daemon at {host}:{port} closed before 'hello'"
+                        buf += chunk
+                    line, _, buf = buf.partition(b"\n")
+                    text = line.decode("utf-8", "replace").strip()
+                    if not text:
+                        continue
+                    try:
+                        msg = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue                       # banner / non-JSON greeting
+                    if not isinstance(msg, dict) or msg.get("id") != 1:
+                        continue                       # notification / other request
+                    if msg.get("error"):
+                        err = msg["error"]
+                        emsg = err.get("message") if isinstance(err, dict) else str(err)
+                        return False, f"daemon 'hello' failed: {emsg}"
+                    if "result" in msg:
+                        dev = (msg["result"] or {}).get("device", {})
+                        return True, dev.get("model", "daemon reachable")
+                    return False, "unexpected hello reply"
         except (OSError, ValueError) as exc:
             return False, f"daemon not reachable at {host}:{port} ({exc})"
 

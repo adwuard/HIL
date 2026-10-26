@@ -1,5 +1,11 @@
 # Logic-Analyzer Capture Daemon — Protocol & Integration Spec
 
+> **The default is now in-process.** HIL drives the ALIENTEK ATK-Logic-Analyzer
+> directly through a vendored MIT core over `logic://usb` — no daemon and no C++
+> build. See [`atk-logic-inprocess.md`](atk-logic-inprocess.md). This spec covers
+> the **optional** out-of-process daemon (`logic://host:5555`), for when you want
+> device isolation or a GPL capture engine.
+
 This is the handoff contract between **HIL** (MIT, Python) and a **logic-analyzer
 capture daemon** (GPLv3, C++). HIL never links GPL code and never touches the
 timing-critical USB path: it is a thin **JSON-RPC client**; the daemon owns the

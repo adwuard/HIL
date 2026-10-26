@@ -8,11 +8,12 @@ a file in ``third_party/recipes/`` or point ``$HIL_RECIPES_DIR`` at a folder).
 
 Two shapes of backend are covered:
 
-* **Python packages** (e.g. the GPLv2 ``ppk2-api``) — a ``pip`` step plus an
-  optional privileged ``system`` step for native runtime libs (``libusb``).
-* **Native builds** (e.g. the GPLv3 ``atk-logic`` capture daemon) — ``system``
-  deps, a ``git`` clone, ``shell`` build steps (qmake/make, cross-compile aware),
-  and a ``daemon``/``binary`` verify probe.
+* **Python packages** (e.g. the GPLv2 ``ppk2-api``, or ``pyusb`` for the in-process
+  ATK-Logic core) — a ``pip`` step plus an optional privileged ``system`` step for
+  native runtime libs (``libusb``).
+* **Native builds / binaries** (e.g. the ``probe-rs`` / ``openocd`` on-chip debug
+  tools) — ``system`` deps, an optional ``git`` clone + ``shell`` build steps
+  (cross-compile aware), and a ``binary``/``daemon`` verify probe.
 
 The model is intentionally small and stdlib-only; the engine
 (:mod:`hil.provision.engine`) interprets it.

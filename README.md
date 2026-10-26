@@ -221,25 +221,33 @@ inherits safety checks, bench steps, the simulator and `--json` reporting for fr
 ### Logic analyzers (ALIENTEK ATK-Logic)
 
 A logic analyzer breaks the SCPI mould: captures are **huge** (MBs-GBs),
-**timing-critical**, and only useful once **protocol-decoded**. So HIL splits it
-into two processes:
-
-- A **capture daemon** (GPLv3) owns the USB device, runs the real-time libusb
-  stream and the `libsigrokdecode` decoders, and writes captures to disk. For the
-  ALIENTEK ATK-Logic this is a headless `--server` build of the `atk-logic` Qt app.
-- HIL is a **thin MIT client** (`driver: logic`, address `logic://host:5555`) that
-  keeps one persistent JSON-RPC connection and receives captures as **artifacts**
-  (a path + metadata), never as bulk bytes in memory. GPL stays out of HIL, and
-  the timing-sensitive work stays out of the control loop.
+**timing-critical**, and only useful once **protocol-decoded**. HIL drives the
+ALIENTEK ATK-Logic-Analyzer (USB `1A86:FFCC`) **in-process** through a vendored
+**MIT** core (`hil._vendor.atklogic`: the `atkproto` device layer, the `atkdl`
+capture container and `srdhost`, a pure-Python sigrok decoder host) — so there is
+**no capture daemon and no GPL boundary**, and being pure Python there is nothing
+to cross-compile. Captures are still received as **artifacts** (a path + metadata),
+never as bulk bytes in memory, so the same `LogicInstrument` facade, pseudo-SCPI
+set, bench steps, simulator and `--json` reporting all work unchanged. Address it
+with `logic://usb` (optionally `?serial=..&decoders=..&libusb=..`):
 
 ```python
 from hil import connect
-la = connect("logic://127.0.0.1:5555", device_slug="alientek-atk-logic")
+la = connect("logic://usb", device_slug="alientek-atk-logic")   # in-process; no daemon
 la.write(":CONF:CHAN 0,1"); la.write(":CONF:RATE 4000000")
 la.write(":TRIG:CHAN 0"); la.write(":TRIG:EDGE R")
-wave = la.run_capture(seconds=0.5, format="csv")   # -> CaptureArtifact (path + metadata)
-dec  = la.decode("i2c")                            # -> decoded artifact (frames)
+wave = la.run_capture(duration_s=0.5, fmt="atkdl")  # -> CaptureArtifact (.atkdl; srzip aliases to it)
+dec  = la.decode({"name": "i2c", "channels": {"scl": 0, "sda": 1}})  # -> decoded artifact (frames)
 print(wave.path, wave.sample_count, dec.frames)
+```
+
+Or drive it straight from the agent-friendly CLI (every command speaks `--json`):
+
+```bash
+hil atklogic info                                    # identify the attached analyzer
+hil atklogic capture --channels 0,1 --rate 4e6 --depth 200000 --out cap.atkdl
+hil atklogic decode cap.atkdl --decoder i2c --map scl=0,sda=1 --out frames.csv
+hil atklogic list i2c                                # enumerate the sigrok decoders
 ```
 
 In a procedure, the `logic` and `decode` steps produce artifacts that land in a
@@ -259,8 +267,11 @@ steps:
 
 This runs with **zero hardware** on the built-in simulator (a synthetic capture
 backend), so you can develop and CI the whole flow before a device is attached.
-See `examples/bench/atk-logic-i2c-decode.yaml`, and `docs/logic-daemon-protocol.md`
-for the daemon's JSON-RPC contract, cross-platform packaging and phasing.
+Setup (pyusb + libusb + a sigrok decoders dir), the `logic://usb` query params and
+MCP/agent registration are in `docs/atk-logic-inprocess.md`; see
+`examples/bench/atk-logic-i2c-decode.yaml` for a full procedure. A separate
+JSON-RPC **capture daemon** (`logic://host:5555`) is still supported for
+out-of-process isolation — its contract is in `docs/logic-daemon-protocol.md`.
 
 ### Flashing & on-chip debug (probe-rs · pyOCD · OpenOCD · esptool · stlink)
 
@@ -345,7 +356,7 @@ for a device, and `hil setup` fetches, builds and verifies whatever it needs.
 hil setup                         # what each backend needs, and whether it's ready
 hil setup --list                  # list the provisioning recipes
 hil setup ppk2                    # Nordic PPK2: pip install ppk2-api + libusb
-hil setup alientek-atk-logic --yes   # ATK-Logic: toolchain + clone + native build
+hil setup alientek-atk-logic --yes   # ATK-Logic: pip pyusb + libusb (in-process; no build)
 hil setup logic --dry-run         # print the whole plan, run nothing
 hil doctor                        # env + backend availability, incl. provisioning
 ```
@@ -782,8 +793,9 @@ git clone https://github.com/adwuard/HIL.git && cd HIL
 pip install -e '.[dev]'                                  # editable + test deps
 ```
 
-Extras: `.[serial]` (RS-232), `.[visa]` (GPIB / VISA / USB), `.[ppk2]` (Nordic PPK2
-backend, GPLv2), `.[all]`, `.[dev]`. Python 3.10+. Core requires only PyYAML.
+Extras: `.[serial]` (RS-232), `.[visa]` (GPIB / VISA / USB), `.[atk]` (ALIENTEK
+ATK-Logic analyzer, in-process), `.[ppk2]` (Nordic PPK2 backend, GPLv2), `.[all]`,
+`.[dev]`. Python 3.10+. Core requires only PyYAML.
 
 ## Status
 

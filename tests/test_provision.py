@@ -50,9 +50,15 @@ def _temp_recipe_dir(tmp_path: Path, monkeypatch, body: str) -> Path:
 
 
 class _FakeDaemon:
-    """A one-shot JSON-RPC 'hello' server for the daemon probe."""
+    """A one-shot JSON-RPC 'hello' server for the daemon probe.
 
-    def __init__(self) -> None:
+    ``preamble`` lines (raw, newline-terminated) are sent before the hello reply
+    to model a daemon that emits a non-JSON banner or unsolicited notifications,
+    which the probe must skip (docs/logic-daemon-protocol.md).
+    """
+
+    def __init__(self, preamble: list[str] | None = None) -> None:
+        self._preamble = list(preamble or [])
         self._sock = socket.socket()
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind(("127.0.0.1", 0))
@@ -72,6 +78,8 @@ class _FakeDaemon:
                 conn.settimeout(1.0)
                 try:
                     conn.recv(4096)
+                    for line in self._preamble:
+                        conn.sendall(line.encode())
                     reply = {"jsonrpc": "2.0", "id": 1,
                              "result": {"device": {"model": "ATK-Logic"}}}
                     conn.sendall((json.dumps(reply) + "\n").encode())
@@ -146,9 +154,12 @@ def test_bundled_recipes_load_and_are_well_formed():
     assert ppk2.slug == "ppk2" and ppk2.driver == "ppk2"
     assert any(s.action == "pip" for s in ppk2.steps)
     assert atk.slug == "alientek-atk-logic" and atk.driver == "logic"
-    build = next(s for s in atk.steps if s.id == "build-daemon")
-    assert build.heavy and build.optional                 # long compile: never implicit
-    assert any(s.action == "git" for s in atk.steps)      # clones the sources
+    assert atk.license.startswith("MIT")                  # vendored MIT core: no GPL boundary
+    assert any(s.action == "pip" for s in atk.steps)      # installs pyusb
+    libusb = next(s for s in atk.steps if s.id == "libusb")
+    assert libusb.privileged and libusb.optional          # native runtime, gated behind --yes
+    assert not any(s.action in ("git", "shell") for s in atk.steps)   # pure Python: no build
+    assert atk.detect and atk.detect[0].module == "usb"   # ready when pyusb imports
 
 
 def test_debug_recipes_load_and_are_well_formed():
@@ -214,6 +225,26 @@ def test_pip_command_builder(tmp_path):
     # the `extra` shorthand installs the HIL optional-dependency extra
     cmd2, argv2 = p._pip_command(Step(id="s", action="pip", pip={"extra": "ppk2"}))
     assert "hil-harness[ppk2]" in argv2
+
+
+def test_pip_command_uv_fallback_without_pip(tmp_path):
+    # uv-managed venvs ship without the pip module -> install via `uv pip --python`
+    plat = Platform(os=MACOS, arch="arm64", python=sys.executable, has_pip=False,
+                    tools={"uv": "/usr/local/bin/uv"})
+    p = Provisioner(plat, work_root=tmp_path, on_output=lambda _line: None)
+    _cmd, argv = p._pip_command(Step(id="s", action="pip", pip={"packages": ["pyusb"]}))
+    assert argv[:3] == ["/usr/local/bin/uv", "pip", "install"]
+    assert "--python" in argv and sys.executable in argv and "pyusb" in argv
+    assert "-m" not in argv                          # not the `python -m pip` form
+
+
+def test_pip_command_no_pip_no_uv_keeps_dash_m_pip(tmp_path, monkeypatch):
+    # neither pip nor uv -> best-effort `-m pip` so the error is the familiar one
+    monkeypatch.setattr("hil.provision.engine.shutil.which", lambda _n: None)
+    p = Provisioner(Platform(os=MACOS, python=sys.executable, has_pip=False),
+                    work_root=tmp_path, on_output=lambda _line: None)
+    _cmd, argv = p._pip_command(Step(id="s", action="pip", pip={"packages": ["pyusb"]}))
+    assert argv[:4] == [sys.executable, "-m", "pip", "install"] and "pyusb" in argv
 
 
 def test_git_command_clone_then_pull(tmp_path):
@@ -377,6 +408,23 @@ def test_daemon_probe_unreachable(tmp_path):
     d.close()                                              # released -> connection refused
     assert _prov(tmp_path).run_probe(
         Probe(kind="daemon", address=f"logic://127.0.0.1:{port}")).ok is False
+
+
+def test_daemon_probe_skips_banner_and_notifications(tmp_path):
+    # A spec-compliant daemon may greet with a non-JSON banner and/or emit
+    # unsolicited notifications (or replies to other ids) before the hello
+    # result; the probe must skip them rather than fail on the first line.
+    d = _FakeDaemon(preamble=[
+        "ATK-Logic daemon v1.2.3 starting...\n",                        # non-JSON banner
+        '{"jsonrpc":"2.0","method":"progress","params":{"pct":0}}\n',  # notification
+        '{"jsonrpc":"2.0","id":99,"result":{"ignored":true}}\n',         # other id
+    ])
+    try:
+        res = _prov(tmp_path).run_probe(
+            Probe(kind="daemon", address=f"logic://127.0.0.1:{d.port}"))
+        assert res.ok is True and "ATK-Logic" in res.detail
+    finally:
+        d.close()
 
 
 @pytest.mark.parametrize("addr,expected", [

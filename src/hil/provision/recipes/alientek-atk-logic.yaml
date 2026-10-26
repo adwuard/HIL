@@ -1,98 +1,63 @@
-# Provisioning recipe: ALIENTEK ATK-Logic capture daemon.
+# Provisioning recipe: ALIENTEK ATK-Logic-Analyzer (in-process USB backend).
 #
-# The logic-analyzer driver (hil.drivers.logic) is a thin MIT JSON-RPC client; the
-# actual capture + decode runs in a separate GPLv3 daemon built from the atk-logic
-# Qt project. This recipe installs the native build toolchain, clones the sources,
-# and (best-effort) builds the daemon and its decode library. It is cross-compile
-# aware: the .pro carries win32/macx/unix/android(NDK) scopes.
+# The logic-analyzer driver (hil.drivers.logic) drives the ATK-Logic-Analyzer
+# *in-process* through HIL's vendored MIT core (hil._vendor.atklogic: atkproto +
+# atkdl + srdhost) — there is NO capture daemon and NO native build. The only
+# optional dependencies are `pyusb` and the native `libusb` runtime it needs;
+# protocol decode additionally wants a directory of sigrok decoders. Pure Python,
+# so there is nothing to compile or cross-compile.
 #
-#   hil setup alientek-atk-logic --dry-run   # print the whole plan, run nothing
-#   hil setup alientek-atk-logic --yes        # install native deps + clone + build
-#   HIL_CROSS_TARGET=android-arm64 hil setup alientek-atk-logic --yes
+#   pip install -e '.[atk]'                 # cold start: HIL + pyusb (the managed extra)
+#   hil setup alientek-atk-logic            # or install pyusb via HIL (libusb step is gated)
+#   hil setup alientek-atk-logic --yes      # ...and allow the privileged libusb install
+#   hil setup alientek-atk-logic --dry-run  # print the plan, run nothing
 slug: alientek-atk-logic
 driver: logic
 description: >
-  ALIENTEK ATK-Logic capture daemon — a GPLv3 Qt/libusb native build (with
-  atk_libsigrokdecode for protocol decode). Requires a C++ toolchain; clones and
-  compiles on demand. Cross-compiles per the .pro platform scopes.
-license: GPLv3
-homepage: https://github.com/adwuard/atk-logic
-workdir: atk-logic
+  ALIENTEK ATK-Logic-Analyzer backend (USB 1A86:FFCC) — driven in-process by HIL's
+  vendored MIT core. Needs only `pyusb` + the native `libusb` runtime; protocol
+  decode additionally wants a sigrok decoders dir. Pure-Python install; no build.
+license: MIT
+homepage: https://github.com/hugelzhang/atk-logic-mcp
 
-# "Ready" means the capture daemon is actually listening (end-to-end usable).
+# The backend is ready when pyusb imports (the vendored core always ships with HIL).
+# Device presence is a runtime check, not a provisioning one — use `hil atklogic info`.
 detect:
-  - daemon:
-      address: "logic://127.0.0.1:5555"
-      describe: "capture daemon reachable on logic://127.0.0.1:5555"
+  - python_import: usb
 
 steps:
-  - id: toolchain
-    name: Install the Qt / libusb / glib / python3 build toolchain
-    privileged: true
+  - id: pip-pyusb
+    name: Install pyusb (USB access for the vendored ATK-Logic core)
+    pip:
+      packages: [pyusb]        # version pin lives in pyproject.toml's `atk` extra;
+                               # the engine uses `uv pip` in pip-less (uv) venvs
+
+  - id: libusb
+    name: Install libusb (native USB runtime for pyusb)
+    privileged: true          # system package -> gated behind --yes
+    optional: true            # many OSes/wheels already provide it
     system:
       macos:
-        brew: [qt@5, libusb, glib, pkg-config, python@3.13]
+        brew: [libusb]
       linux:
-        apt-get: [qtbase5-dev, qtdeclarative5-dev, qtquickcontrols2-5-dev,
-                  libusb-1.0-0-dev, libglib2.0-dev, pkg-config, python3-dev,
-                  build-essential]
-        dnf: [qt5-qtbase-devel, qt5-qtdeclarative-devel, libusb1-devel,
-              glib2-devel, pkgconf-pkg-config, python3-devel, gcc-c++, make]
+        apt-get: [libusb-1.0-0-dev]
+        dnf: [libusb1-devel]
+        pacman: [libusb]
+        zypper: [libusb-1_0-devel]
       windows:
-        choco: [qt5-base, libusb, pkgconfiglite, python3]
-
-  - id: check-toolchain
-    name: Confirm git + a C++ compiler + qmake are present
-    needs: [git]
-    shell:
-      default: >
-        git --version && pkg-config --version &&
-        { qmake --version || qmake6 --version; } &&
-        { c++ --version || g++ --version || clang --version; }
-
-  - id: clone
-    name: Clone the atk-logic sources
-    needs: [git]
-    git:
-      repo: https://github.com/adwuard/atk-logic.git
-      dest: src
-      rev: main
-      depth: 1
-
-  - id: decode-lib
-    name: Check for atk_libsigrokdecode (protocol decode; capture works without it)
-    optional: true
-    shell:
-      default: >
-        if pkg-config --exists libsigrokdecode || [ -e "$HOME/Desktop/atk-libs/lib/libsigrokdecode"* ] ||
-        [ -e "$HOME/Desktop/atk-libs/lib/atk_decoder.o" ]; then
-        echo "decode libs found"; else
-        echo "decode libs not present -> capture-only build (decode is phase P3);";
-        echo "see docs/logic-daemon-protocol.md for atk_libsigrokdecode + glib + python3-embed"; fi
-
-  - id: build-daemon
-    name: Build the ATK-Logic daemon (qmake + make)
-    optional: true
-    heavy: true          # a long native compile: never started implicitly (auto mode)
-    needs: [make]
-    shell:
-      default: >
-        cd src && { qmake ATK-Logic.pro || qmake6 ATK-Logic.pro; } &&
-        make -j"$( (nproc 2>/dev/null) || sysctl -n hw.ncpu 2>/dev/null || echo 4 )" ||
-        echo "build incomplete: the headless --server target and/or decode libs are pending (see notes)"
+        choco: [libusb]
 
 verify:
-  - daemon:
-      address: "logic://127.0.0.1:5555"
-      describe: "capture daemon reachable on logic://127.0.0.1:5555"
+  - python_import: usb
 
 notes: >
-  The headless `--server` JSON-RPC entry (docs/logic-daemon-protocol.md, phase P1)
-  is future C++ work in the atk-logic repo, and decode needs atk_libsigrokdecode +
-  glib + python3-embed (phase P3). Until the daemon `--server` build exists and is
-  launched, the `daemon` verify probe stays red: `hil setup` will have installed
-  the toolchain and cloned the sources, but capture/decode over `logic://` needs
-  that running daemon. Cross-compiling (e.g. Android) is driven by the .pro scopes
-  — set HIL_CROSS_TARGET and the matching ATK_ANDROID_LIBUSB prefix. Everything up
-  to the daemon runs hardware-free on HIL's simulator (`hil bench run` with no
-  --address), so bench flows are testable before the daemon ships.
+  Connect in-process with `hil connect logic://usb` (optionally
+  `logic://usb?serial=ATK22&decoders=/path&libusb=/path`), or use the dedicated CLI
+  `hil atklogic {info,list,capture,decode,convert}` (every command speaks --json).
+  Confirm the analyzer is attached with `hil atklogic info` (reports USB 1A86:FFCC,
+  serial, 16 channels, <=200 MS/s). libusb is auto-discovered on macOS
+  (`brew install libusb`) and Linux; set $ATK_LIBUSB_DLL to override. Protocol
+  decode needs a sigrok decoders dir — set $ATK_DECODERS_DIR (or pass --decoders);
+  on macOS the ATK-Logic.app bundle already ships one. Capture needs no daemon:
+  pyusb + libusb are imported lazily, so `import hil` never requires them.
+  `hil setup logic` resolves to this same recipe (driver: logic).

@@ -5,16 +5,15 @@ HIL's MIT core works out of the box for the common case (SCPI over
 that HIL deliberately does not bundle:
 
 * **Nordic PPK2** — the GPLv2 ``ppk2-api`` Python package (+ ``libusb``).
-* **ALIENTEK ATK-Logic** — a GPLv3 native capture daemon built from the
-  ``atk-logic`` Qt project (Qt, ``libusb``, ``glib``, ``python3-embed``, a C++
-  toolchain; cross-compiles per platform).
+* **ALIENTEK ATK-Logic** — driven in-process by HIL's vendored MIT core; the only
+  optional deps are ``pyusb`` + the native ``libusb`` runtime (no daemon, no build).
 
 This package turns "install the right thing for the device you just plugged in"
 into a declarative, testable, cross-platform flow::
 
     hil setup                 # show what each backend needs / whether it's ready
     hil setup ppk2            # fetch + install the PPK2 backend
-    hil setup alientek-atk-logic --yes   # ...and allow privileged native deps
+    hil setup alientek-atk-logic --yes   # ...and allow the privileged libusb install
     hil setup logic --dry-run # print the plan without running anything
 
 Programmatic entry points: :func:`provision`, :func:`status`, and :func:`ensure`

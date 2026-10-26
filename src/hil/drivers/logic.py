@@ -591,13 +591,24 @@ def _channel_column(channel: str) -> str:
 
 
 def logic_driver(addr: Address, device: Device | None, timeout: float) -> LogicInstrument:
-    """Factory for ``logic://host[:port]`` (or a device with ``driver: logic``)."""
-    host = addr.host
-    port = addr.port or DEFAULT_LOGIC_PORT
+    """Factory for ``logic://`` addresses (or a device with ``driver: logic``).
+
+    ``logic://usb[?serial=..&decoders=..&libusb=..]`` drives an ATK-Logic-Analyzer
+    **in-process** via the vendored MIT core (no daemon). ``logic://host[:port]``
+    drives the JSON-RPC capture daemon.
+    """
+    host = (addr.host or "").lower()
     if not host:
         raise HilError(
-            "logic:// needs a daemon host, e.g. logic://127.0.0.1:5555 "
-            "(the ATK-Logic capture daemon; see docs/logic-daemon-protocol.md)"
+            "logic:// needs a target, e.g. logic://usb (in-process ATK-Logic) or "
+            "logic://127.0.0.1:5555 (capture daemon; see docs/logic-daemon-protocol.md)"
         )
-    backend = LogicDaemonBackend(host, port, timeout=timeout)
+    if host in ("usb", "local", "atk"):
+        from ._atklogic import AtkLogicBackend
+        backend = AtkLogicBackend(serial=addr.params.get("serial"),
+                                  decoders_dir=addr.params.get("decoders"),
+                                  libusb=addr.params.get("libusb"),
+                                  timeout=timeout)
+    else:
+        backend = LogicDaemonBackend(host, addr.port or DEFAULT_LOGIC_PORT, timeout=timeout)
     return LogicInstrument(backend, device=device, timeout=timeout)

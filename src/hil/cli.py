@@ -11,6 +11,8 @@
     hil setup [target] [--dry-run|--yes]      # fetch/build device backends on demand
     hil debug probe debug://probe-rs          # list attached on-chip debug probes
     hil debug flash debug://auto?target=esp32 fw.bin   # flash firmware (routes by chip)
+    hil atklogic info                         # identify the attached ATK-Logic analyzer
+    hil atklogic capture --channels 0,1 --rate 1e6 --depth 200000 --out cap.atkdl
 """
 
 from __future__ import annotations
@@ -79,6 +81,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_bench_parser(sub, sub_common)
     _add_telemetry_parsers(sub, sub_common)
     _add_debug_parser(sub, sub_common)
+    _add_atklogic_parser(sub, sub_common)
 
     sub.add_parser("doctor", help="environment and backend availability", parents=[sub_common])
 
@@ -349,6 +352,76 @@ def _add_debug_parser(
     target_arg(sp)
     sp.add_argument("--seconds", type=float, default=5.0, help="capture duration (default 5)")
     sp.add_argument("--out", help="write the RTT log to this file (default: spool)")
+
+
+def _add_atklogic_parser(
+    sub: argparse._SubParsersAction, sub_common: argparse.ArgumentParser
+) -> None:
+    """`hil atklogic {info,list,capture,decode,convert}`.
+
+    Direct, in-process control of an ALIENTEK ATK-Logic-Analyzer (USB ``1A86:FFCC``)
+    through the vendored MIT core — **no capture daemon**. ``info``/``capture`` need
+    the analyzer attached; ``list``/``decode``/``convert`` run offline on saved
+    artifacts. Reuses :class:`hil.drivers._atklogic.AtkCore`, the same core the
+    ``logic://usb`` backend drives, so the two can never drift.
+    """
+    p = sub.add_parser(
+        "atklogic",
+        help="ATK-Logic-Analyzer in-process (info/list/capture/decode/convert)",
+        parents=[sub_common],
+    )
+    asub = p.add_subparsers(dest="atklogic_cmd", required=True)
+
+    def dev_args(sp: argparse.ArgumentParser) -> None:
+        sp.add_argument("--serial", help="device serial (default: first ATK-Logic found)")
+        sp.add_argument("--decoders", help="sigrok decoders dir (default: $ATK_DECODERS_DIR)")
+        sp.add_argument("--libusb", help="libusb-1.0 path hint (default: auto-discover)")
+
+    sp = asub.add_parser("info", help="identify the attached analyzer", parents=[sub_common])
+    dev_args(sp)
+
+    sp = asub.add_parser("list", help="list available protocol decoders", parents=[sub_common])
+    dev_args(sp)
+    sp.add_argument("filter", nargs="?", default="", help="substring filter (e.g. 'i2c')")
+
+    sp = asub.add_parser("capture", help="acquire samples and save an artifact", parents=[sub_common])
+    dev_args(sp)
+    sp.add_argument("--channels", default="0",
+                    help="channel list, e.g. '0', '0,1', 'ch0,ch7' (default 0)")
+    sp.add_argument("--rate", type=float, default=1e6,
+                    help="sample rate in Hz, snapped to a device gear (default 1e6)")
+    sp.add_argument("--depth", type=int, default=100000, help="samples to capture (default 100000)")
+    sp.add_argument("--threshold", type=float, default=1.5, help="logic threshold volts (default 1.5)")
+    sp.add_argument("--trigger", default="rising",
+                    help="rising|falling|any|high|low (default rising)")
+    sp.add_argument("--mode", default="buffer", choices=("buffer", "trigger"),
+                    help="capture mode (default buffer)")
+    sp.add_argument("--rle", action="store_true", help="enable run-length encoding on the wire")
+    sp.add_argument("--fmt", default="atkdl", choices=("atkdl", "csv", "raw"),
+                    help="output format (default atkdl)")
+    sp.add_argument("--out", required=True, help="output artifact path")
+
+    sp = asub.add_parser("decode", help="decode a saved artifact with sigrok PDs", parents=[sub_common])
+    dev_args(sp)
+    sp.add_argument("artifact", help="capture artifact (.atkdl or .csv)")
+    sp.add_argument("--decoder", action="append", default=[],
+                    help="decoder name (repeatable to build a stack)")
+    sp.add_argument("--map", dest="map", default="",
+                    help="first-decoder channel map, e.g. 'rx=0,tx=1'")
+    sp.add_argument("--option", action="append", default=[],
+                    help="decoder option k=v (repeatable, first decoder)")
+    sp.add_argument("--max-samples", type=int, default=4000000, help="decode sample cap (default 4e6)")
+    sp.add_argument("--max-items", type=int, default=200, help="annotation/transaction cap (default 200)")
+    sp.add_argument("--fmt", default="csv", choices=("csv", "json"),
+                    help="output format when --out is set (default csv)")
+    sp.add_argument("--out", help="write decoded rows here (default: print summary only)")
+
+    sp = asub.add_parser("convert", help="re-serialize a saved capture to csv/raw", parents=[sub_common])
+    dev_args(sp)
+    sp.add_argument("artifact", help="source capture artifact (.atkdl or .csv)")
+    sp.add_argument("--channels", default="", help="channel subset, e.g. '0,1' (default: all in file)")
+    sp.add_argument("--fmt", default="csv", choices=("csv", "raw"), help="target format (default csv)")
+    sp.add_argument("--out", required=True, help="output path")
 
 
 # -- output helpers -----------------------------------------------------------
@@ -789,6 +862,145 @@ def cmd_debug(args: argparse.Namespace) -> int:
     return 0 if payload.get("ok", True) else 1
 
 
+# -- atklogic (in-process ATK-Logic-Analyzer) ---------------------------------
+
+
+def _parse_channels(spec: str) -> list[str]:
+    """``'0'`` / ``'0,1,7'`` / ``'ch0,ch7'`` -> token list for ``channel_to_index``."""
+    tokens = [t for t in str(spec or "").replace(" ", "").split(",") if t]
+    return tokens or ["0"]
+
+
+def _parse_pairs(spec: str) -> dict:
+    """``'rx=0,tx=1'`` -> ``{'rx': 0, 'tx': 1}`` (a sigrok channel map)."""
+    out: dict = {}
+    for part in str(spec or "").split(","):
+        part = part.strip()
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        try:
+            out[k] = int(v[2:]) if v.lower().startswith("ch") else int(v)
+        except ValueError:
+            pass
+    return out
+
+
+def _parse_options(specs) -> dict:
+    """``['baudrate=115200']`` -> ``{'baudrate': 115200}`` (ints when possible)."""
+    out: dict = {}
+    for part in specs or []:
+        part = str(part).strip()
+        if not part or "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k, v = k.strip(), v.strip()
+        try:
+            out[k] = int(v)
+        except ValueError:
+            out[k] = v
+    return out
+
+
+def _build_decoders(args: argparse.Namespace) -> list[dict]:
+    """Assemble the decoder stack for ``hil atklogic decode`` (first gets map+opts)."""
+    names = [n for n in (args.decoder or []) if n]
+    if not names:
+        return []
+    stack = [{"name": names[0], "channels": _parse_pairs(getattr(args, "map", "")),
+              "options": _parse_options(getattr(args, "option", []))}]
+    stack += [{"name": n} for n in names[1:]]
+    return stack
+
+
+def _atklogic_dispatch(action: str, args: argparse.Namespace) -> tuple[dict, str]:
+    """Run one ``hil atklogic`` action; return a ``(payload, human)`` pair."""
+    from .drivers._atklogic import AtkCore
+
+    core = AtkCore(serial=args.serial, decoders_dir=args.decoders, libusb=args.libusb)
+    try:
+        if action == "info":
+            ident = core.identify()
+            human = "\n".join([
+                f"{ident['vendor']} {ident['model']}  SN {ident['serial'] or '-'}",
+                f"  usb_id:    {ident['usb_id']}",
+                f"  channels:  {ident['channels']}",
+                f"  rates_mhz: {ident['rates_mhz']}",
+                f"  max_rate:  {ident['max_sample_rate_hz']} Hz",
+                f"  libusb:    {ident['libusb'] or '(system)'}",
+                f"  decoders:  {ident['decoders_dir']}",
+            ])
+            return {"ok": True, **ident}, human
+
+        if action == "list":
+            protos = core.list_protocols(args.filter or "")
+            head = f"{len(protos)} decoder(s) in {core.decoders_dir}" + (":" if protos else "")
+            human = "\n".join([head] + [f"  {n}" for n in protos])
+            return {"ok": True, "count": len(protos), "decoders_dir": core.decoders_dir,
+                    "filter": args.filter or "", "protocols": protos}, human
+
+        if action == "capture":
+            cap = core.capture(channels=_parse_channels(args.channels), depth=args.depth,
+                               sample_rate_hz=args.rate, threshold_v=args.threshold,
+                               trigger=args.trigger, mode=args.mode,
+                               timeout_s=max(args.timeout, 30.0), rle=args.rle)
+            out = core.save_capture(cap, args.fmt, args.out)
+            stats = {c: cap.stats(c) for c in cap.chs}
+            lines = [
+                f"captured {cap.depth} samples @ {cap.srate_hz:g} Hz "
+                f"({'complete' if cap.complete else 'partial'}) "
+                f"in {cap.elapsed_s:.3f}s -> {out}",
+                f"  channels: {cap.chs}  trigger: {cap.trigger}  mode: {cap.mode}  fmt: {args.fmt}",
+            ]
+            for c in cap.chs:
+                s = stats[c]
+                lines.append(
+                    f"  ch{c}: high={(s.get('high_pct') or 0):.1f}% "
+                    f"rising={s.get('rising_edges') or 0} falling={s.get('falling_edges') or 0} "
+                    f"freq={(s.get('frequency_hz') or 0):.6g}Hz")
+            return {"ok": True, "path": str(out), "format": args.fmt, "channels": cap.chs,
+                    "sample_rate_hz": cap.srate_hz, "sample_count": cap.depth,
+                    "duration_s": cap.duration_s, "complete": cap.complete,
+                    "elapsed_s": cap.elapsed_s,
+                    "bytes": out.stat().st_size if out.exists() else 0,
+                    "trigger": cap.trigger, "mode": cap.mode, "stats": stats}, "\n".join(lines)
+
+        if action == "decode":
+            result = core.decode(args.artifact, _build_decoders(args) or None,
+                                 max_samples=args.max_samples, max_items=args.max_items)
+            payload = {"ok": True, "source": args.artifact, "chain": result.get("chain"),
+                       "frames": result.get("frames"), "from_saved": result.get("from_saved"),
+                       "sample_rate_hz": result.get("sample_rate_hz"),
+                       "layers": result.get("layers"), "transactions": result.get("transactions")}
+            lines = [f"decoded {result.get('frames', 0)} frame(s) from {args.artifact}",
+                     f"  chain: {result.get('chain')}"]
+            if args.out:
+                out, frames = core.write_decode(result, args.fmt, args.out)
+                payload.update({"out": str(out), "out_format": args.fmt, "out_frames": frames,
+                                "bytes": out.stat().st_size if out.exists() else 0})
+                lines.append(f"  wrote {frames} row(s) -> {out}")
+            return payload, "\n".join(lines)
+
+        if action == "convert":
+            channels = _parse_channels(args.channels) if args.channels else None
+            res = core.convert(args.artifact, args.fmt, args.out, channels=channels)
+            human = (f"converted {args.artifact} -> {res['path']} ({res['format']}, "
+                     f"{res['sample_count']} samples, ch {res['channels']} "
+                     f"@ {res['sample_rate_hz']:g} Hz, {res['bytes']} B)")
+            return {"ok": True, **res}, human
+
+        raise HilError(f"hil atklogic: unknown action '{action}'")
+    finally:
+        core.close()
+
+
+def cmd_atklogic(args: argparse.Namespace) -> int:
+    payload, human = _atklogic_dispatch(args.atklogic_cmd, args)
+    _emit(args, payload, human)
+    return 0 if payload.get("ok", True) else 1
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     import platform
 
@@ -999,6 +1211,7 @@ _COMMANDS = {
     "scrape": cmd_scrape,
     "bench": cmd_bench,
     "debug": cmd_debug,
+    "atklogic": cmd_atklogic,
     "log": cmd_log,
     "analyze": cmd_analyze,
     "doctor": cmd_doctor,

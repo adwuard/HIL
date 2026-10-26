@@ -7,6 +7,7 @@ Supported address forms:
     visa://VISA_RESOURCE              any VISA resource, e.g. visa://GPIB::24::INSTR
     ppk2://PORT                       Nordic Power Profiler Kit II (non-SCPI driver)
     logic://host[:port]               logic-analyzer capture daemon (default port 5555)
+    logic://usb[?serial=..&decoders=..&libusb=..]   in-process ATK-Logic backend (no daemon)
     debug://BACKEND[?target=..&probe=..&transport=swd]   on-chip debugger (flash/SWD/JTAG)
     GPIB::24::INSTR                   bare VISA resource (auto-detected by '::')
 
@@ -51,6 +52,9 @@ class Address:
         if self.scheme == "tcp":
             return f"tcp://{self.host}:{self.port}"
         if self.scheme == "logic":
+            if self.host in ("usb", "local", "atk"):
+                qs = "&".join(f"{k}={v}" for k, v in self.params.items())
+                return f"logic://{self.host}" + (f"?{qs}" if qs else "")
             return f"logic://{self.host}:{self.port}"
         if self.scheme == "debug":
             qs = "&".join(f"{k}={v}" for k, v in self.params.items())
@@ -100,15 +104,18 @@ def parse_address(raw: str) -> Address:
         return Address(scheme="tcp", host=host, port=parts.port or DEFAULT_SCPI_PORT)
 
     if scheme == "logic":
-        # logic://host[:port] — a logic-analyzer capture daemon (JSON-RPC over TCP)
+        # logic://host[:port]  — JSON-RPC capture daemon, OR
+        # logic://usb[?serial=..&decoders=..&libusb=..] — in-process ATK-Logic backend.
         parts = urlsplit(f"//{rest}", scheme="logic")
         host = parts.hostname or ""
         if not host:
             raise AddressError(
                 f"Missing host in logic address '{raw}'. "
-                "Expected e.g. 'logic://127.0.0.1:5555'."
+                "Expected e.g. 'logic://127.0.0.1:5555' (daemon) or 'logic://usb' (in-process)."
             )
-        return Address(scheme="logic", host=host, port=parts.port or DEFAULT_LOGIC_PORT)
+        params = {k: v[-1] for k, v in parse_qs(parts.query).items()}
+        return Address(scheme="logic", host=host, port=parts.port or DEFAULT_LOGIC_PORT,
+                       params=params)
 
     if scheme == "debug":
         # debug://BACKEND[?target=chip&probe=id&transport=swd] — an on-chip debugger.

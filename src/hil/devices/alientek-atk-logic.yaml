@@ -4,14 +4,16 @@ model: ATK-Logic
 category: logic-analyzer
 driver: logic                   # non-SCPI: routed to hil.drivers.logic
 description: >
-  ALIENTEK logic analyzer (MCU/FPGA over USB). Not SCPI and not a stock sigrok
-  driver: capture runs in a separate headless daemon (a --server build of the
-  GPLv3 atk-logic app) that owns the device and does libsigrokdecode decoding.
-  HIL is a thin MIT client that drives it over JSON-RPC on logic://host:port and
-  receives captures as file-backed artifacts, never as bulk in-memory samples.
+  ALIENTEK logic analyzer (MCU/FPGA over USB, VID:PID 1A86:FFCC). Not SCPI. Driven
+  *in-process* by HIL's vendored MIT core (hil._vendor.atklogic) over logic://usb —
+  no capture daemon and no GPL boundary. Captures are file-backed artifacts (.atkdl
+  by default, or csv/raw) and protocol decode uses a pure-Python sigrok host. A
+  separate JSON-RPC capture daemon (logic://host:port) is also still supported.
 interfaces: [usb]
 connection_examples:
-  - logic://127.0.0.1:5555       # local capture daemon (default port)
+  - logic://usb                   # in-process backend (vendored MIT core; no daemon)
+  - logic://usb?serial=ATK22      # ...selecting one analyzer by serial
+  - logic://127.0.0.1:5555        # alternative: local JSON-RPC capture daemon
 capabilities:
   - logic-capture
   - hardware-trigger
@@ -41,7 +43,7 @@ commands:
   - name: set-format
     syntax: ':CONF:FORM <fmt>'
     description: Fetch format for the capture artifact.
-    parameters: '<fmt> = csv | srzip | raw'
+    parameters: '<fmt> = atkdl | csv | srzip | raw  (srzip is served as .atkdl)'
   - name: set-trigger-channel
     syntax: ':TRIG:CHAN <n>'
     description: Trigger on channel n.
@@ -75,4 +77,4 @@ commands:
     syntax: ':DEC <name>?'
     query: true
     description: Run a protocol decoder over the last capture; returns the decoded path.
-    parameters: '<name> = a libsigrokdecode decoder, e.g. i2c | spi | uart'
+    parameters: '<name> = a sigrok decoder (pure-Python host), e.g. i2c | spi | uart'

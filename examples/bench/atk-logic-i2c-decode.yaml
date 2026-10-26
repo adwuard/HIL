@@ -3,11 +3,12 @@
 # writes small artifacts to a throwaway spool, so the whole flow (configure ->
 # capture -> decode -> assert) runs with no hardware.
 #
-# To drive a real ALIENTEK ATK-Logic, start its capture daemon and point HIL at
-# it:  hil bench run examples/bench/atk-logic-i2c-decode.yaml --address logic://127.0.0.1:5555
-# The daemon (a headless --server build of the GPLv3 atk-logic app) owns the USB
-# device and runs libsigrokdecode; HIL stays a thin MIT JSON-RPC client and gets
-# captures back as file artifacts. See docs/logic-daemon-protocol.md.
+# To drive a real ALIENTEK ATK-Logic-Analyzer, point HIL at the in-process backend:
+#   hil bench run examples/bench/atk-logic-i2c-decode.yaml --address logic://usb
+# HIL drives the device directly through its vendored MIT core (no daemon, no GPL
+# boundary) and gets captures back as file artifacts. An out-of-process JSON-RPC
+# capture daemon (--address logic://127.0.0.1:5555) is also supported. See
+# docs/atk-logic-inprocess.md (default) and docs/logic-daemon-protocol.md (daemon).
 name: ATK-Logic I2C capture and decode
 description: >
   Arm a 2-channel capture with a hardware trigger on SCL, fetch the waveform to
