@@ -69,6 +69,84 @@ def test_exec_unknown_slug_error(capsys):
     assert payload["ok"] is False
 
 
+def test_exec_works_with_non_scpi_driver(monkeypatch, capsys):
+    """Regression: `hil exec` must work with *any* BaseInstrument driver, not
+    just SCPI. safe_execute used to return a bare string for non-SCPI drivers,
+    so cmd_exec crashed with `TypeError: string indices must be integers`."""
+    from hil.errors import HilError
+    from hil.instrument import BaseInstrument
+
+    class _Drv(BaseInstrument):
+        def idn(self) -> str:
+            return "DRV,MODEL,SN,FW"
+
+        def query(self, command, timeout=None):
+            if command.startswith("BOOM"):
+                raise HilError("kaboom")
+            return "7"
+
+        def write(self, command) -> None:
+            pass
+
+        def drain_errors(self) -> list[str]:
+            return []  # non-SCPI driver: no SYST:ERR? queue to poll
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("hil.cli.connect", lambda *a, **k: _Drv())
+    code = main(["exec", "drv://x", ":MEAS:CURR?", "BOOM?", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 1  # the BOOM? command failed
+    results = payload["results"]
+    assert results[0]["response"] == "7"
+    assert results[0]["ok"] is True
+    assert results[1]["ok"] is False
+    assert "kaboom" in results[1]["error"]
+
+
+def test_log_setup_runs_before_capture(monkeypatch, capsys, tmp_path):
+    """`hil log --setup CMD` sends CMD (via safe_execute) before capturing, so a
+    PPK2 can set ':CONF:MODE AMP' / ':SOUR:VOLT' before sampling."""
+    from hil.instrument import BaseInstrument
+
+    calls: list[tuple] = []
+
+    class _Drv(BaseInstrument):
+        def idn(self) -> str:
+            return "DRV,MODEL,SN,FW"
+
+        def query(self, command, timeout=None):
+            return "0"
+
+        def write(self, command) -> None:
+            calls.append(("write", command))
+
+        def drain_errors(self) -> list[str]:
+            return []
+
+        def capture(self, channel, seconds, interval=None, units=""):
+            calls.append(("capture", channel))
+            return []
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr("hil.cli.connect", lambda *a, **k: _Drv())
+    out = tmp_path / "cap.csv"
+    code = main([
+        "log", "drv://x", "--channel", "current", "--seconds", "1",
+        "--setup", ":CONF:MODE AMP", "--setup", ":SOUR:VOLT 3300",
+        "--out", str(out), "--json",
+    ])
+    payload = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert payload["ok"] is True
+    assert calls[0] == ("write", ":CONF:MODE AMP")
+    assert calls[1] == ("write", ":SOUR:VOLT 3300")
+    assert calls[-1] == ("capture", "current")
+
+
 def test_errors_queue_empty(fake_address, capsys):
     code = main(["errors", fake_address, "--json"])
     payload = json.loads(capsys.readouterr().out)

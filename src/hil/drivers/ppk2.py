@@ -18,11 +18,12 @@ analyzer for correlating code activity with power, not drivable outputs::
 
     :DIG<n>?   :DIG:PORT?
 
-The read verbs are *optional* on the backend: the bundled :class:`Ppk2ApiBackend`
-raises a clear error because upstream ``ppk2-api`` does not expose them yet, while
-an injected backend that implements ``read_digital`` lights them up automatically.
-``capture("digital")`` streams the 8-bit input word so current spikes can be
-correlated with logic edges.
+The PPK2 streams the 8 logic lines *inside* each sample frame, so the bundled
+:class:`Ppk2ApiBackend` decodes them from ``ppk2-api``'s ``get_samples()`` (which
+returns ``(analog, digital)``); a digital read returns the latest captured 8-bit
+word while measuring. An injected backend that implements ``read_digital``
+directly is used as-is. ``capture("digital")`` streams the input word so current
+spikes can be correlated with logic edges.
 
 Native 100 kSps sampling powers :meth:`Ppk2Instrument.capture` (µA → A, or W
 when the channel is power), which the telemetry layer logs durably.
@@ -54,6 +55,13 @@ _DIGITAL_INPUT_ONLY = (
     "feature) and cannot be driven as outputs. Read them with ':DIG<n>?' or "
     "':DIG:PORT?'."
 )
+_DIGITAL_NEEDS_ACQ = (
+    "ppk2 driver: no digital data buffered yet — the PPK2 carries its 8 logic "
+    "lines inside the sample frames, so start acquisition first (':SOUR:VOLT <mv>' "
+    "then ':INIT:ACQ') before reading ':DIG:PORT?' or ':DIG<n>?'."
+)
+_START_SETTLE_S = 0.05       # let the 100 kSps stream fill the buffer after start
+_CALIBRATE_RETRIES = 3       # drains of a stale serial buffer before giving up
 
 
 class Ppk2Backend(Protocol):
@@ -100,6 +108,7 @@ class Ppk2ApiBackend:
     def __init__(self, port: str) -> None:
         self.port = port
         self._api: Any = None
+        self._last_digital: int | None = None
 
     def _load(self) -> Any:
         if self._api is None:
@@ -114,8 +123,49 @@ class Ppk2ApiBackend:
                         "ppk2", "ppk2", "ppk2-api"
                     ) from exc
             self._api = PPK2_API(self.port)
-            _maybe_call(self._api, "get_modifiers")
+            self._calibrate()
         return self._api
+
+    def _calibrate(self) -> None:
+        """Load the device's calibration modifiers, tolerating a stale buffer.
+
+        A prior session can leave the PPK2 streaming sample bytes; ``ppk2-api``
+        reads metadata as UTF-8 until ``END`` and raises ``UnicodeDecodeError``
+        on that binary. Halt sampling and drain first, then retry a few times.
+        Falls back to ppk2-api's built-in default modifiers rather than failing
+        the connection.
+        """
+        api = self._api
+        if not hasattr(api, "get_modifiers"):
+            return
+        try:
+            if hasattr(api, "stop_measuring"):
+                api.stop_measuring()
+        except Exception:
+            pass
+        time.sleep(0.05)
+        self._drain()
+        for _ in range(_CALIBRATE_RETRIES):
+            try:
+                if api.get_modifiers():
+                    return
+            except UnicodeDecodeError:
+                pass
+            except Exception:
+                return
+            self._drain()
+            time.sleep(0.12)
+
+    def _drain(self) -> None:
+        ser = getattr(self._api, "ser", None)
+        for meth in ("reset_input_buffer", "flushInput"):
+            fn = getattr(ser, meth, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                return
 
     def connect(self) -> None:
         self._load()
@@ -124,23 +174,48 @@ class Ppk2ApiBackend:
         _maybe_call(self._load(), "use_source_meter", "select_source_meter_mode")
 
     def use_amp_meter(self) -> None:
-        _maybe_call(self._load(), "use_amp_meter", "select_amp_meter_mode")
+        _maybe_call(self._load(), "use_ampere_meter", "use_amp_meter", "select_amp_meter_mode")
 
     def set_source_voltage(self, mv: int) -> None:
         self._load().set_source_voltage(int(mv))
 
     def start(self) -> None:
         self._load().start_measuring()
+        time.sleep(_START_SETTLE_S)   # let the 100 kSps stream fill the buffer
 
     def stop(self) -> None:
         _maybe_call(self._load(), "stop_measuring")
 
-    def read_samples(self) -> list[float]:
+    def _read_frames(self) -> tuple[list[float], list[int]]:
+        """Read one sampling period -> (analog µA values, 8-bit digital words).
+
+        ``ppk2-api`` >= 0.9 returns ``(samples, raw_digital_output)``; older
+        builds returned a flat list of analog floats. Both shapes are handled so
+        the driver works across versions.
+        """
         api = self._load()
         data = api.get_data()
         if not data:
-            return []
-        return [float(x) for x in api.get_samples(data)]
+            return [], []
+        res = api.get_samples(data)
+        if isinstance(res, tuple) and len(res) == 2:
+            analog, digital = res
+        else:                       # legacy: a flat list of analog floats
+            analog, digital = res, []
+        analog = [float(x) for x in (analog or [])]
+        digital = [int(b) & 0xFF for b in (digital or [])]
+        if digital:
+            self._last_digital = digital[-1]
+        return analog, digital
+
+    def read_samples(self) -> list[float]:
+        return self._read_frames()[0]
+
+    def set_output(self, on: bool) -> None:
+        """Enable/disable DUT power (source mode) via ppk2-api's toggle_DUT_power."""
+        fn = _first_callable(self._load(), "toggle_DUT_power")
+        if fn is not None:
+            fn("ON" if on else "OFF")
 
     def close(self) -> None:
         try:
@@ -151,18 +226,27 @@ class Ppk2ApiBackend:
     def info(self) -> str:
         return f"ppk2-api@{self.port}"
 
-    # -- optional digital inputs ------------------------------------------
-    # ppk2-api does not implement these yet; read_digital raises a clear,
-    # actionable error unless a future/alternative backend exposes the method.
+    # -- 8 digital input channels (D0..D7) --------------------------------
+    # The PPK2 carries the logic lines inside each sample frame, so a read
+    # returns the latest captured 8-bit word (while measuring). A dedicated
+    # read_digital-style method on another backend is used if present.
 
     def read_digital(self) -> int:
+        api = self._load()
+        if callable(getattr(api, "get_data", None)) and callable(getattr(api, "get_samples", None)):
+            _analog, digital = self._read_frames()
+            if digital:
+                return digital[-1]
+            if self._last_digital is not None:
+                return self._last_digital
+            raise HilError(_DIGITAL_NEEDS_ACQ)
         fn = _first_callable(
-            self._load(), "read_digital", "get_digital_channels",
+            api, "read_digital", "get_digital_channels",
             "read_digital_port", "get_gpio",
         )
         if fn is None:
             raise HilError(_UNSUPPORTED_DIGITAL)
-        return int(fn())
+        return int(fn()) & 0xFF
 
 
 class Ppk2Instrument(BaseInstrument):
@@ -198,7 +282,9 @@ class Ppk2Instrument(BaseInstrument):
         elif head == ":OUTP":
             if arg.startswith("ON") or arg == "1":
                 self.backend.use_source_meter()
+                self._set_dut_power(True)
             else:
+                self._set_dut_power(False)
                 self.backend.stop()
                 self._measuring = False
         elif head == ":CONF:MODE":
@@ -250,8 +336,20 @@ class Ppk2Instrument(BaseInstrument):
         raise HilError(f"ppk2 driver: unsupported query '{command}'")
 
     # -- native sampling ----------------------------------------------------
+    def _set_dut_power(self, on: bool) -> None:
+        fn = getattr(self.backend, "set_output", None)
+        if callable(fn):
+            fn(on)
+
     def _ensure_measuring(self) -> None:
         if not self._measuring:
+            if not self._vset_mv:
+                raise HilError(
+                    "ppk2 driver: set a voltage before measuring — send "
+                    "':SOUR:VOLT <mv>' (e.g. ':SOUR:VOLT 3300') first; the PPK2 "
+                    "needs an input/output voltage reference to sample (ppk2-api "
+                    "raises 'Input voltage not set!' otherwise)."
+                )
             self.backend.start()
             self._measuring = True
 
@@ -314,6 +412,13 @@ class Ppk2Instrument(BaseInstrument):
         return out
 
     def close(self) -> None:
+        # De-energize first: closing must never leave VOUT sourcing. A failed
+        # bench procedure skips its ':OUTP OFF' cleanup, so close() is the last
+        # line of defence (a no-op for backends without set_output).
+        try:
+            self._set_dut_power(False)
+        except Exception:  # pragma: no cover
+            pass
         try:
             self.backend.stop()
         except Exception:  # pragma: no cover

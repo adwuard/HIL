@@ -44,7 +44,7 @@ class Instrument(Protocol):
     def write(self, command: str) -> None: ...
     def query(self, command: str, timeout: float | None = None) -> str: ...
     def execute(self, command: str) -> str: ...
-    def safe_execute(self, command: str, timeout: float | None = None) -> str: ...
+    def safe_execute(self, command: str, timeout: float | None = None) -> dict[str, object]: ...
     def reset(self) -> None: ...
     def opc(self) -> bool: ...
     def wait_until_done(self, timeout: float = 30.0) -> bool: ...
@@ -101,13 +101,42 @@ class BaseInstrument(ABC):
         self.write(command)
         return ""
 
-    def safe_execute(self, command: str, timeout: float | None = None) -> str:
-        """Single-transaction execute: query with a timeout, or write."""
+    def safe_execute(self, command: str, timeout: float | None = None) -> dict[str, object]:
+        """Execute one command and return a structured result dict.
+
+        Mirrors :meth:`ScpiInstrument.safe_execute` so the CLI and agents get one
+        consistent shape from *every* driver, SCPI or not. Always returns a dict
+        and never raises on device-level errors: a failing command is reported as
+        ``{"ok": False, "error": ...}``. ``drain_errors`` is consulted only when
+        the concrete driver provides it (most non-SCPI drivers don't).
+        """
         command = command.strip()
-        if command.endswith("?"):
-            return self.query(command, timeout)
-        self.write(command)
-        return ""
+        is_query = command.endswith("?")
+        started = time.monotonic()
+        result: dict[str, object] = {"command": command, "ok": True, "query": is_query}
+        try:
+            if is_query:
+                result["response"] = self.query(command, timeout)
+            else:
+                self.write(command)
+                result["response"] = None
+        except Exception as exc:  # device-level failure -> structured, not raised
+            result["ok"] = False
+            result["error"] = str(exc)
+            result["response"] = None
+            return result
+        errors: list[str] = []
+        drain = getattr(self, "drain_errors", None)
+        if callable(drain):
+            try:
+                errors = [str(e) for e in drain()]
+            except Exception:
+                errors = []
+        result["errors"] = errors
+        if errors:
+            result["ok"] = False
+        result["elapsed_s"] = round(time.monotonic() - started, 3)
+        return result
 
     # -- SCPI-common lifecycle (drivers may override) -----------------------
     def reset(self) -> None:

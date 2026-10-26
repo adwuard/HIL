@@ -48,6 +48,41 @@ class FakeBackend:
         return self.dio_in
 
 
+class FakePpk2Api:
+    """Mimics ppk2-api 0.9.2's PPK2_API surface for backend-level tests.
+
+    Models the real contract discovered on hardware: ``get_samples()`` returns
+    ``(analog_uA, digital_words)``, AMP mode is ``use_ampere_meter``, DUT power
+    is ``toggle_DUT_power("ON"/"OFF")``, and ``start_measuring()`` requires a
+    voltage to have been set first.
+    """
+
+    def __init__(self, analog=(1000.0, 2000.0), digital=(0b101, 0b011)):
+        self._analog = list(analog)
+        self._digital = list(digital)
+        self.mode = None
+        self.vdd = None
+        self.measuring = False
+        self.dut = None
+        self.modifiers = {"Calibrated": None}
+        self.ser = self                     # _drain() calls ser.reset_input_buffer()
+
+    def reset_input_buffer(self): pass
+    def reset_output_buffer(self): pass
+    def get_modifiers(self): self.modifiers["Calibrated"] = True; return True
+    def use_source_meter(self): self.mode = "SOURCE_MODE"
+    def use_ampere_meter(self): self.mode = "AMPERE_MODE"
+    def set_source_voltage(self, mV): self.vdd = int(mV)
+    def start_measuring(self):
+        if not self.vdd:
+            raise Exception("Input voltage not set!")
+        self.measuring = True
+    def stop_measuring(self): self.measuring = False
+    def toggle_DUT_power(self, state): self.dut = state
+    def get_data(self): return b"\x01\x02\x03\x04" if self.measuring else b""
+    def get_samples(self, buf): return (list(self._analog), list(self._digital))
+
+
 def test_driver_registry_has_builtins():
     names = available_drivers()
     assert {"scpi", "ppk2", "logic", "debug"} <= set(names)
@@ -182,3 +217,97 @@ def test_ppk2_api_backend_digital_unsupported_raises():
     be._api = object()                             # bypass lazy ppk2-api import
     with pytest.raises(HilError):
         be.read_digital()
+
+
+# -- ppk2-api 0.9.2 contract (validated against real PPK2 hardware) ----------
+
+
+def test_ppk2_api_backend_unpacks_tuple_samples():
+    # ppk2-api >=0.9 get_samples() -> (analog_uA, digital_words); the old driver
+    # did float(x) over the 2-tuple and crashed. Regression: unpack the analog.
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    be = Ppk2ApiBackend("COM3"); api = FakePpk2Api(analog=(1500.0, 2500.0)); be._api = api
+    api.measuring = True
+    assert be.read_samples() == [1500.0, 2500.0]
+
+
+def test_ppk2_api_backend_legacy_flat_samples():
+    # Older ppk2-api returned a flat list of floats; both shapes must work.
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    class Legacy(FakePpk2Api):
+        def get_samples(self, buf): return list(self._analog)
+    be = Ppk2ApiBackend("COM3"); api = Legacy(analog=(999.0,)); be._api = api
+    api.measuring = True
+    assert be.read_samples() == [999.0]
+
+
+def test_ppk2_api_backend_read_digital_decodes_stream():
+    # D0..D7 ride inside each sample frame; a read returns the latest captured
+    # 8-bit word (the driver used to report these as unsupported).
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    be = Ppk2ApiBackend("COM3"); api = FakePpk2Api(digital=(0b101, 0b011)); be._api = api
+    api.measuring = True
+    assert be.read_digital() == 0b011
+
+
+def test_ppk2_api_backend_read_digital_needs_acquisition():
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    be = Ppk2ApiBackend("COM3"); api = FakePpk2Api(); be._api = api
+    assert api.measuring is False                  # get_data() -> b"" when idle
+    with pytest.raises(HilError):
+        be.read_digital()
+
+
+def test_ppk2_api_backend_amp_alias_maps_to_use_ampere_meter():
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    be = Ppk2ApiBackend("COM3"); api = FakePpk2Api(); be._api = api
+    be.use_amp_meter()
+    assert api.mode == "AMPERE_MODE"
+
+
+def test_ppk2_api_backend_set_output_toggles_dut_power():
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    be = Ppk2ApiBackend("COM3"); api = FakePpk2Api(); be._api = api
+    be.set_output(True);  assert api.dut == "ON"
+    be.set_output(False); assert api.dut == "OFF"
+
+
+def test_ppk2_api_backend_calibrate_tolerates_stale_buffer():
+    # A device left streaming corrupts the UTF-8 metadata scan; _calibrate must
+    # drain + retry rather than let UnicodeDecodeError crash connect().
+    from hil.drivers.ppk2 import Ppk2ApiBackend
+    class Flaky(FakePpk2Api):
+        def __init__(self): super().__init__(); self._n = 0
+        def get_modifiers(self):
+            self._n += 1
+            if self._n < 3:
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte")
+            self.modifiers["Calibrated"] = True
+            return True
+    be = Ppk2ApiBackend("COM3"); api = Flaky(); be._api = api
+    be._calibrate()
+    assert api.modifiers["Calibrated"] is True
+
+
+def test_ppk2_measure_without_voltage_raises_actionable():
+    # The PPK2 needs a voltage reference before sampling; surface an actionable
+    # error instead of ppk2-api's opaque "Input voltage not set!".
+    inst = Ppk2Instrument("COM3", backend=FakeBackend())
+    with pytest.raises(HilError, match="SOUR:VOLT"):
+        inst.query(":MEAS:CURR?")
+
+
+def test_ppk2_outp_drives_dut_power_when_backend_supports():
+    class FakeWithOutput(FakeBackend):
+        def __init__(self): super().__init__(); self.out = None
+        def set_output(self, on): self.out = bool(on)
+    be = FakeWithOutput()
+    inst = Ppk2Instrument("COM3", backend=be)
+    inst.write(":OUTP ON")
+    assert be.out is True and be.mode == "source"
+    inst.write(":OUTP OFF")
+    assert be.out is False and be.measuring is False
+    # closing always de-energizes (a failed procedure skips its ':OUTP OFF')
+    be.out = True                      # simulate output left sourcing
+    inst.close()
+    assert be.out is False

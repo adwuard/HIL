@@ -258,6 +258,11 @@ def _add_telemetry_parsers(
     lp.add_argument("--units", default="", help="unit label for samples (A, V, W, ...)")
     lp.add_argument("--out", default=None, help="capture file (.ndjson default, or .csv)")
     lp.add_argument("--device", help="slug for safety policy when using a raw address")
+    lp.add_argument(
+        "--setup", action="append", default=[], metavar="CMD",
+        help="command(s) sent before capture, in order (repeatable) — e.g. for a "
+             "PPK2: --setup ':CONF:MODE AMP' --setup ':SOUR:VOLT 3300'",
+    )
     lp.add_argument("--sim", action="store_true", help="hardware-free dry-run on the simulator")
     lp.add_argument("--sim-value", default="1.0", help="simulated reply for --sim (default 1.0)")
 
@@ -414,10 +419,11 @@ def cmd_exec(args: argparse.Namespace) -> int:
     else:
         lines = []
         for r in results:  # type: ignore[index]
-            if r["response"] is not None:
+            if not r["ok"]:
+                err = r.get("error") or "; ".join(r.get("errors") or []) or "failed"
+                lines.append(f"{r['command']} -> ERROR {err}")
+            elif r.get("response") is not None:
                 lines.append(f"{r['command']} -> {r['response']}")
-            elif r["errors"]:
-                lines.append(f"{r['command']} -> ERROR {r['errors']}")
             else:
                 lines.append(f"{r['command']} -> ok")
         _emit(args, {}, "\n".join(lines))
@@ -911,6 +917,13 @@ def _log_instrument(args: argparse.Namespace):
 def cmd_log(args: argparse.Namespace) -> int:
     inst = _log_instrument(args)
     try:
+        for cmd in getattr(args, "setup", None) or []:
+            r = inst.safe_execute(cmd)
+            if not r.get("ok", True):
+                raise HilError(
+                    f"setup command failed: {cmd!r} -> "
+                    f"{r.get('error') or '; '.join(r.get('errors') or []) or 'error'}"
+                )
         samples = inst.capture(args.channel, args.seconds, args.interval, args.units)
     finally:
         inst.close()

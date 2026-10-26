@@ -44,5 +44,8 @@ verify:
 
 notes: >
   After provisioning, connect with `hil connect ppk2:///dev/cu.usbmodemXXXX` (macOS)
-  or the matching serial port. The PPK2's 8 digital channels are inputs only and
-  are not exposed by upstream ppk2-api yet (the driver reports a clear error).
+  or the matching serial port. The PPK2 enumerates two CDC ports; the control port
+  is the one whose metadata read succeeds (PPK2_API.list_devices() lists both). Set
+  ':SOUR:VOLT <mv>' before ':INIT:ACQ' — ppk2-api needs a voltage reference to
+  sample. The 8 digital channels are inputs only, decoded from the sample stream
+  (a read returns the latest captured 8-bit word while measuring).
