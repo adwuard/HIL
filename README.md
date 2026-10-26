@@ -18,7 +18,7 @@ pip install git+https://github.com/adwuard/HIL.git     # active development — 
 > the `hil` name there belongs to an unrelated project, so HIL will publish as
 > **`hil-harness`**. Install from source (above); the API may change between commits.
 
-**725** instruments · **7** vendors · **~294k** SCPI commands · runs with **zero** hardware
+**725** instruments · **7** vendors · **~294k** SCPI commands · DUT flash/debug on **Cortex-M & ESP32** via **SWD · JTAG · serial** (+ RTT · GDB)
 
 ---
 
@@ -301,6 +301,13 @@ log = tgt.rtt(duration_s=5)                     # SEGGER RTT -> {'path', 'line_c
 (OpenOCD, esptool) and BSD stlink are invoked strictly as **subprocesses**, so
 nothing copyleft links into HIL. A missing tool raises an actionable error naming
 the exact `hil setup <tool>` to run.
+
+Transports follow the probe: Cortex-M targets are reached over **SWD** or
+**JTAG** (`&transport=swd|jtag` / `&interface=...` in the URL), while the ESP32
+is flashed and inspected over its **serial** ROM bootloader (UART/USB-serial,
+no probe needed). On top of either wire you get SEGGER **RTT** for logs,
+**GDB** for interactive sessions, and the same flash / erase / halt / step /
+memory / register surface.
 
 The imperative CLI mirrors the facade — every verb also takes `--json`, and `--sim`
 runs the whole surface on the in-memory target with no probe attached:
