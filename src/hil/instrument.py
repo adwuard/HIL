@@ -33,6 +33,24 @@ from .registry import Device
 from .telemetry import Sample
 
 
+def is_simulated(inst: Any) -> bool:
+    """True when ``inst`` is backed by a hardware-free simulator.
+
+    Checks the instrument, its transport and its debug backend for a ``simulated``
+    marker (set on :class:`~hil.bench.sim.SimTransport` and the debug simulator).
+    No I/O, so it is safe to call on any driver. Results built from a simulated
+    instrument carry a loud ``simulated: true`` flag so an agent can never mistake
+    a dry-run for a real bench reading.
+    """
+    if getattr(inst, "simulated", False):
+        return True
+    for attr in ("transport", "backend"):
+        obj = getattr(inst, attr, None)
+        if obj is not None and getattr(obj, "simulated", False):
+            return True
+    return False
+
+
 @runtime_checkable
 class Instrument(Protocol):
     """The verbs the bench/CLI depend on; satisfied by every HIL driver."""

@@ -209,6 +209,106 @@ def test_safe_wrapper_never_raises():
     assert isinstance(res, dict) and res.get("ok") is False
 
 
+# --- pure logic: sessions, verify, sweep + the loud `simulated` flag --------
+KEITHLEY_IDN = "KEITHLEY INSTRUMENTS INC.,MODEL 2400,SN1,C33"
+
+
+def _sim_inst(idn=KEITHLEY_IDN, responses=None):
+    from hil.bench.sim import SimTransport
+    from hil.scpi import ScpiInstrument
+
+    return ScpiInstrument(SimTransport(responses or {}, idn=idn), device=None)
+
+
+def test_hil_probe_reports_matched_slug_and_simulated(monkeypatch):
+    monkeypatch.setattr(M, "connect",
+                        lambda target, device_slug=None, timeout=5.0: _sim_inst())
+    res = M.hil_probe("sim://k")
+    assert res["ok"] is True
+    assert res["matched_slug"] == "keithley-2400"
+    assert res["simulated"] is True
+
+
+def test_hil_exec_target_flags_simulated(monkeypatch):
+    monkeypatch.setattr(M, "connect",
+                        lambda target, device_slug=None, timeout=5.0: _sim_inst())
+    res = M.hil_exec(target="sim://k", commands=["*IDN?"])
+    assert res["ok"] is True and res["simulated"] is True
+    assert res["results"][0]["response"].startswith("KEITHLEY")
+
+
+def test_hil_session_open_autobinds_and_flags_simulated(monkeypatch):
+    import hil
+
+    monkeypatch.setattr(hil, "connect",
+                        lambda target, device_slug=None, timeout=5.0, registry_dirs=(): _sim_inst())
+    res = M.hil_session(action="open", name="mcp1", target="sim://k")
+    try:
+        assert res["ok"] is True and res["simulated"] is True
+        assert res["matched_slug"] == "keithley-2400" and res["safety_bound"] is True
+        # a session-backed exec carries the flag and reuses the live handle
+        ex = M.hil_exec(session="mcp1", commands=["*IDN?"])
+        assert ex["ok"] is True and ex["simulated"] is True
+        assert "mcp1" in M.hil_session(action="list")["sessions"]
+    finally:
+        M.hil_session(action="close", name="mcp1")
+
+
+def test_hil_exec_unknown_session_is_structured_error():
+    res = M.hil_exec(session="does-not-exist", commands=["*IDN?"])
+    assert res["ok"] is False and "no such session" in res["error"]
+
+
+def test_hil_verify_flags_simulated(monkeypatch):
+    monkeypatch.setattr(M, "connect",
+                        lambda target, device_slug=None, timeout=5.0:
+                        _sim_inst(responses={"MEAS:VOLT?": "5.0"}))
+    res = M.hil_verify("MEAS:VOLT?", within="4.9..5.1", target="sim://k")
+    assert res["ok"] is True and res["value"] == 5.0 and res["simulated"] is True
+
+
+def test_hil_sweep_aborts_safely_and_flags_simulated(monkeypatch):
+    monkeypatch.setattr(M, "connect",
+                        lambda target, device_slug=None, timeout=5.0:
+                        _sim_inst(responses={":OUTP:STAT?": "0"}))
+    res = M.hil_sweep(0, 5, 1, source="sim://k", reset=False, reset_settle=0.0)
+    assert res["ok"] is False and res["aborted"] == "output-not-on"
+    assert res["simulated"] is True
+
+
+def test_hil_capture_then_analyze_is_hardware_free(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "connect",
+                        lambda target, device_slug=None, timeout=5.0:
+                        _sim_inst(responses={"MEAS:VOLT?": "3.3"}))
+    out = tmp_path / "cap.ndjson"
+    cap = M.hil_capture("sim://k", "MEAS:VOLT?", seconds=0.05, interval=0.01, out=str(out))
+    assert cap["ok"] is True and cap["simulated"] is True and cap["captured"] >= 1
+    ana = M.hil_analyze(str(out))
+    assert ana["ok"] is True and ana["count"] >= 1
+    assert "MEAS:VOLT?" in ana["channels"]
+
+
+def test_hil_help_requires_model_or_target():
+    res = M.hil_help()          # neither model nor target
+    assert res["ok"] is False and "model" in res["error"]
+
+
+def test_hil_help_rejects_unknown_model_with_hint():
+    res = M.hil_help(model="Keysight 34461A")   # outside the corpus -> reportable
+    assert res["ok"] is False and res.get("hint")
+
+
+def test_hil_discover_returns_uniform_shape(monkeypatch):
+    from hil import discovery
+
+    monkeypatch.setattr(discovery, "_backend_flags",
+                        lambda: {"visa": False, "serial": False,
+                                 "zeroconf": False, "debug": False})
+    res = M.hil_discover(interfaces=["usb", "serial"], identify=False)
+    assert res["ok"] is True and res["devices"] == []
+    assert res["warnings"]
+
+
 # --- registration: needs the mcp SDK ---------------------------------------
 def test_build_server_registers_expected_tools_and_resources():
     pytest.importorskip("mcp", reason="mcp SDK not installed")
@@ -216,8 +316,10 @@ def test_build_server_registers_expected_tools_and_resources():
     tools = asyncio.run(srv.list_tools())
     names = {t.name for t in tools}
     expected = {
-        "hil_doctor", "hil_devices", "hil_device", "hil_probe", "hil_exec",
-        "hil_errors", "hil_capture", "hil_debug_probe", "hil_debug", "hil_setup",
+        "hil_doctor", "hil_devices", "hil_device", "hil_help", "hil_discover",
+        "hil_probe", "hil_exec", "hil_session", "hil_verify", "hil_sweep",
+        "hil_errors", "hil_capture", "hil_analyze", "hil_scrape",
+        "hil_debug_probe", "hil_debug", "hil_setup",
     }
     assert expected <= names
     # every tool carries a description and a JSON input schema

@@ -31,6 +31,10 @@ NO_ERROR = '0,"NO ERROR"'
 class SimTransport(BaseTransport):
     """A fake instrument that replies from a static response map."""
 
+    #: Marks this transport as hardware-free so results can carry a loud
+    #: ``simulated: true`` flag and never be mistaken for a real bench reading.
+    simulated = True
+
     def __init__(
         self,
         responses: Mapping[str, str] | None = None,

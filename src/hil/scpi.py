@@ -88,6 +88,19 @@ class ScpiInstrument(BaseInstrument):
         reply = self.query("*OPC?", timeout=timeout)
         return reply.strip() == "1"
 
+    def sync(self, timeout: float | None = None) -> bool:
+        """Block until the instrument has finished processing prior writes.
+
+        This is the *OPC? barrier that makes error attribution correct: without
+        it a rejected write (e.g. SCPI ``-141``) can still be sitting unprocessed
+        when the caller drains the queue, so the error leaks onto whatever
+        command is sent next. Call ``sync()`` after a write, *then* drain.
+        """
+        try:
+            return self.opc(timeout=timeout)
+        except InstrumentError:
+            return False
+
     def wait_until_done(self, timeout: float = 30.0, poll: float = 0.1) -> None:
         """Poll *OPC? until the instrument is idle, or raise TimeoutError_."""
         deadline = time.monotonic() + timeout

@@ -77,6 +77,33 @@ def _build_parser() -> argparse.ArgumentParser:
     dp = dsub.add_parser("show", help="show one device definition", parents=[sub_common])
     dp.add_argument("slug")
 
+    p = sub.add_parser(
+        "help",
+        help="look up the correct SCPI syntax for a model (reference corpus)",
+        parents=[sub_common],
+    )
+    p.add_argument(
+        "model",
+        help="model, slug, or *IDN? string (e.g. 'DP932E', 'Rigol DP932E')",
+    )
+    p.add_argument("--command", default="", help="filter by mnemonic fragment (e.g. OUTP:STAT)")
+    p.add_argument("--subsystem", default="", help="filter by subsystem (e.g. MEASure)")
+    p.add_argument("--limit", type=int, default=40, help="max commands to return (default 40)")
+
+    p = sub.add_parser(
+        "discover",
+        help="enumerate the instruments attached to THIS host right now",
+        parents=[sub_common],
+    )
+    p.add_argument(
+        "--interfaces", default="",
+        help="comma list of usb,serial,lan,debug (default: all)",
+    )
+    p.add_argument(
+        "--no-identify", action="store_true",
+        help="skip the per-device *IDN? round-trip (faster, no model match)",
+    )
+
     _add_scrape_parser(sub, sub_common)
     _add_bench_parser(sub, sub_common)
     _add_telemetry_parsers(sub, sub_common)
@@ -92,7 +119,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "targets", nargs="*",
-        help="device slug / driver / recipe slug, or 'all' (default: status of every recipe)",
+        help="python backend (serial/visa/usb/mdns/all), or a device slug / driver / "
+        "recipe slug (default: status of every recipe)",
     )
     p.add_argument("--list", action="store_true", help="list provisioning recipes and exit")
     p.add_argument("--check", action="store_true", help="only report status; change nothing")
@@ -602,6 +630,84 @@ def cmd_devices(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_help(args: argparse.Namespace) -> int:
+    """`hil help <model>` — the correct SCPI for an exact model from the corpus."""
+    from . import reference
+
+    result = reference.help_lookup(
+        args.model, subsystem=args.subsystem, command=args.command, limit=args.limit
+    )
+    if args.json:
+        _emit(args, result, "")
+        return 0 if result.get("ok") else 1
+
+    matched = result.get("matched") or {}
+    if not result.get("ok"):
+        print(result.get("hint", "no match"), file=sys.stderr)
+        for n in result.get("near", []):
+            print(f"  near: {n['slug']:<24} {n['name']} ({n['score']})", file=sys.stderr)
+        return 1
+    dev = result.get("device", {})
+    head = matched.get("name") or dev.get("name") or matched.get("slug")
+    print(f"{head}  ({matched.get('slug')})")
+    if dev.get("model"):
+        print(f"  vendor/model: {dev.get('manufacturer','')} / {dev.get('model')}")
+    if dev.get("manual"):
+        print(f"  manual:       {dev['manual']}")
+    cmds = result.get("commands", [])
+    print(f"  commands:     {len(cmds)}"
+          + (f" (filtered by {args.command or args.subsystem})" if (args.command or args.subsystem) else ""))
+    for c in cmds:
+        q = "?" if c.get("query") else " "
+        params = ", ".join(p.get("name", "") for p in c.get("parameters", []))
+        line = f"    {c.get('mnemonic','')}{q}"
+        if params:
+            line += f"  ({params})"
+        desc = (c.get("description") or "").strip()
+        if desc:
+            line += f"  — {desc[:70]}"
+        print(line)
+    if result.get("hint"):
+        print(f"\n  note: {result['hint']}", file=sys.stderr)
+    return 0
+
+
+def cmd_discover(args: argparse.Namespace) -> int:
+    """`hil discover` — enumerate the instruments actually attached right now."""
+    from . import discovery
+
+    interfaces = tuple(
+        i.strip() for i in (args.interfaces or "").split(",") if i.strip()
+    ) or discovery.DEFAULT_INTERFACES
+    timeout = 3.0 if args.timeout <= 5.0 else args.timeout
+
+    def progress(msg: str) -> None:
+        if not args.json:
+            print(msg, file=sys.stderr)
+
+    result = discovery.discover(
+        interfaces, identify=not args.no_identify, timeout=timeout, on_progress=progress
+    )
+    if args.json:
+        _emit(args, result, "")
+        return 0
+
+    devices = result.get("devices", [])
+    backends = result.get("backends", {})
+    ready = ", ".join(k for k, v in backends.items() if v) or "(none)"
+    print(f"discovered {len(devices)} device(s)  [backends ready: {ready}]")
+    for d in devices:
+        name = d.get("matched_name") or (d.get("identity", {}) or {}).get("model") or d.get("transport", "")
+        print(f"  {d.get('address','')}" + (f"   {name}" if name else ""))
+        if d.get("idn"):
+            print(f"      *IDN? {d['idn']}")
+        if d.get("matched_slug"):
+            print(f"      ref:  {d['matched_slug']}  (hil help {d['matched_slug']})")
+    for w in result.get("warnings", []):
+        print(f"  [warn] {w}", file=sys.stderr)
+    return 0
+
+
 def cmd_scrape(args: argparse.Namespace) -> int:
     from pathlib import Path
 
@@ -1054,7 +1160,8 @@ def cmd_atklogic(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     import platform
 
-    from . import provision
+    from . import provision, pyinstall
+    from .transports import backend_details
 
     devices = load_registry()
     prov = provision.status(platform=provision.detect())
@@ -1063,6 +1170,8 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         "python": platform.python_version(),
         "platform": platform.platform(),
         "backends": backend_status(),
+        "backend_details": backend_details(),
+        "environment": pyinstall.environment_report(),
         "registry_devices": len(devices),
         "provisioning": [
             {"slug": r.recipe.slug, "ready": r.satisfied,
@@ -1082,41 +1191,58 @@ def cmd_doctor(args: argparse.Namespace) -> int:
             f"{p['slug']}: {'ready' if p['ready'] else p['hint']}"
             for p in payload["provisioning"]
         ) or "(none)"
-        _emit(
-            args,
-            {},
-            "\n".join(
-                [
-                    f"hil {__version__} on Python {payload['python']} ({payload['platform']})",
-                    f"backends: {backends}",
-                    f"registry: {payload['registry_devices']} devices",
-                    f"optional device backends: {prov_str}",
-                    "missing backend? pip install 'hil-harness[serial]' / 'hil-harness[visa]' / 'hil-harness[all]'",
-                    "missing device backend? run the hinted 'hil setup <slug>' (or 'hil setup --list')",
-                ]
-            ),
+        env = payload["environment"]
+        lines = [
+            f"hil {__version__} on Python {payload['python']} ({payload['platform']})",
+            f"interpreter: {env['python']}"
+            + ("  (uv tool venv — no pip)" if env["uv_tool_venv"] else ""),
+            f"backends: {backends}",
+            f"registry: {payload['registry_devices']} devices",
+            f"optional device backends: {prov_str}",
+        ]
+        # Concrete, copy-pasteable install commands for any missing python backend.
+        missing = [b for b in ("serial", "visa") if not payload["backends"].get(b)]
+        if not payload["backends"].get("usb") and "visa" not in missing:
+            missing.append("usb")
+        for b in dict.fromkeys(missing):
+            lines.append(f"  to enable {b}: {pyinstall.install_command(pyinstall.backend_packages(b))}")
+        lines.append(
+            "  all backends at once: "
+            + pyinstall.install_command(pyinstall.backend_packages("all"))
         )
+        lines.append("missing device backend? run the hinted 'hil setup <slug>' (or 'hil setup --list')")
+        _emit(args, {}, "\n".join(lines))
     return 0
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
     """`hil setup [targets...]` — check / download / build device backends."""
-    from . import provision
+    from . import provision, pyinstall
 
     platform = provision.detect()
 
     if args.list:
         recipes = provision.load_recipes()
         rows = [r.to_dict() for r in recipes.values()]
+        backends = {
+            name: {"packages": list(pyinstall.backend_packages(name)),
+                   "label": pyinstall.BACKEND_LABELS.get(name, ""),
+                   "command": pyinstall.install_command(pyinstall.backend_packages(name))}
+            for name in ("serial", "visa", "usb", "mdns", "all")
+        }
         if args.json:
-            _emit(args, rows, "")
+            _emit(args, {"recipes": rows, "python_backends": backends}, "")
         else:
-            lines = ["provisioning recipes (third-party device backends):"]
+            lines = ["python backends (installed into this interpreter):"]
+            for name, b in backends.items():
+                lines.append(f"  {name:<7} {b['label']}")
+                lines.append(f"          {b['command']}")
+            lines.append("provisioning recipes (third-party device backends):")
             for slug, r in sorted(recipes.items()):
                 lines.append(f"  {slug}  [{r.license or 'n/a'}]  driver={r.driver or '-'}")
                 if r.description:
                     lines.append(f"      {r.description.strip()}")
-            lines.append("run: hil setup <slug> [--dry-run|--yes]   |   hil setup <device-slug>")
+            lines.append("run: hil setup <backend|slug> [--dry-run|--yes]   |   hil setup <device-slug>")
             _emit(args, {}, "\n".join(lines))
         return 0
 
@@ -1140,6 +1266,15 @@ def cmd_setup(args: argparse.Namespace) -> int:
             _emit(args, {}, "\n".join(lines))
         return 0 if all(r.satisfied for r in reports) else 1
 
+    # Python-backend extras (serial/visa/usb/mdns/all) install PyPI packages into
+    # THIS interpreter — they are not third-party device recipes, so handle them
+    # here with the uv-tool-aware command from hil.pyinstall.
+    from . import pyinstall
+
+    backend_targets = [t for t in targets if pyinstall.is_backend(t)]
+    if backend_targets:
+        return _setup_python_backends(args, backend_targets)
+
     # Provision the resolved targets.
     reports = provision.provision(
         targets,
@@ -1156,6 +1291,60 @@ def cmd_setup(args: argparse.Namespace) -> int:
             if r.recipe.notes and not r.satisfied:
                 print(f"  notes: {r.recipe.notes.strip()}")
     return 0 if all(r.ok for r in reports) else 1
+
+
+def _setup_python_backends(args: argparse.Namespace, names: list[str]) -> int:
+    """Install python-backend packages (serial/visa/usb/mdns/all) into THIS env.
+
+    Uses the same uv-tool-aware command the provisioning engine does, so it works
+    in a uv venv / uv tool install that has no ``pip``. Non-privileged (a package
+    install), so it runs unless ``--dry-run``; ``--dry-run`` just prints it.
+    """
+    import shlex
+    import subprocess
+
+    from . import pyinstall
+
+    pkgs: list[str] = []
+    for n in names:
+        for p in pyinstall.backend_packages(n):
+            if p not in pkgs:
+                pkgs.append(p)
+    cmd = pyinstall.install_command(pkgs)
+    argv = shlex.split(cmd)
+
+    if args.dry_run:
+        payload = {"ok": True, "dry_run": True, "backends": names,
+                   "packages": pkgs, "command": cmd}
+        _emit(args, payload, f"would run: {cmd}")
+        return 0
+
+    if not args.json:
+        print(f"installing {', '.join(pkgs)} into {pyinstall.running_python()}")
+        print(f"  $ {cmd}")
+    try:
+        proc = subprocess.run(argv, capture_output=args.json, text=True)
+        ok = proc.returncode == 0
+    except FileNotFoundError as exc:
+        payload = {"ok": False, "backends": names, "packages": pkgs, "command": cmd,
+                   "error": f"installer not runnable: {exc}",
+                   "hint": "install uv (https://docs.astral.sh/uv/) or run the command above manually."}
+        _emit(args, payload, f"error: {payload['error']}")
+        return 1
+
+    payload = {"ok": ok, "backends": names, "packages": pkgs, "command": cmd,
+               "returncode": proc.returncode}
+    if args.json:
+        if proc.stdout:
+            payload["stdout"] = proc.stdout[-4000:]
+        if proc.stderr:
+            payload["stderr"] = proc.stderr[-4000:]
+        _emit(args, payload, "")
+    else:
+        human = ("installed: " + ", ".join(pkgs)) if ok else (
+            f"install failed (exit {proc.returncode}) — see output above")
+        _emit(args, {}, human)
+    return 0 if ok else 1
 
 
 def _log_instrument(args: argparse.Namespace):
@@ -1299,6 +1488,8 @@ _COMMANDS = {
     "exec": cmd_exec,
     "errors": cmd_errors,
     "devices": cmd_devices,
+    "help": cmd_help,
+    "discover": cmd_discover,
     "scrape": cmd_scrape,
     "bench": cmd_bench,
     "debug": cmd_debug,

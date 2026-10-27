@@ -5,7 +5,7 @@ import textwrap
 import pytest
 
 from hil.errors import RegistryError, SafetyViolationError
-from hil.registry import load_device_file, load_registry
+from hil.registry import load_device_file, load_registry, match_device_by_idn
 from hil.registry.loader import BUILTIN_DIR
 
 
@@ -106,3 +106,31 @@ def test_user_dir_overrides_builtin(tmp_path):
 def test_builtin_dir_exists():
     assert BUILTIN_DIR.is_dir()
     assert len(list(BUILTIN_DIR.glob("*.yaml"))) >= 4
+
+
+# -- conservative *IDN? -> registry device matching --------------------------
+def test_match_device_by_idn_handles_vendor_noise():
+    devs = load_registry()
+    # verbose vendor + a leading MODEL token still resolve to the right profile
+    assert match_device_by_idn(
+        "KEITHLEY INSTRUMENTS INC.,MODEL 2400,SN,C33", devs).slug == "keithley-2400"
+    assert match_device_by_idn("Keithley,2400,SN,C33", devs).slug == "keithley-2400"
+    assert match_device_by_idn(
+        "Keysight Technologies,AC6801B,MY,1.0", devs).slug == "keysight-ac6801b"
+
+
+def test_match_device_by_idn_rebrand_alias():
+    devs = load_registry()
+    # Keysight spun out of Agilent; an older *IDN? still matches the Keysight profile.
+    assert match_device_by_idn(
+        "Agilent Technologies,AC6801B,MY,1.0", devs).slug == "keysight-ac6801b"
+
+
+def test_match_device_by_idn_rejects_unknown_or_vendor_only():
+    devs = load_registry()
+    # not in the registry at all
+    assert match_device_by_idn("Rigol Technologies,DP932E,DP9D,1", devs) is None
+    # vendor overlaps an existing Keysight profile but the model does not -> reject
+    assert match_device_by_idn("Keysight Technologies,34461A,MY,1", devs) is None
+    assert match_device_by_idn("", devs) is None
+    assert match_device_by_idn("GARBAGE", devs) is None

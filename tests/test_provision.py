@@ -604,8 +604,13 @@ def test_connect_missing_ppk2_backend_hints_setup(monkeypatch):
 # =========================================================================
 def test_cli_setup_list(capsys):
     assert main(["setup", "--list", "--json"]) == 0
-    rows = json.loads(capsys.readouterr().out)
+    data = json.loads(capsys.readouterr().out)
+    rows = data["recipes"]
     assert {"ppk2", "alientek-atk-logic"} <= {r["slug"] for r in rows}
+    # python backends are advertised with a concrete, uv-tool-aware install command
+    assert "visa" in data["python_backends"]
+    assert "pyvisa" in data["python_backends"]["visa"]["packages"]
+    assert "install" in data["python_backends"]["visa"]["command"]
 
     assert main(["setup", "--list"]) == 0
     out = capsys.readouterr().out

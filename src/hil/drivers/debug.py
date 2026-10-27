@@ -234,6 +234,9 @@ class DebugSimBackend:
                  chip: str = "sim-target", fw_version: str = "sim-1.0.0",
                  core: str = "cortex-m4") -> None:
         self.spool = spool or ArtifactSpool()
+        # Marks this backend hardware-free so results carry a loud `simulated: true`
+        # flag and are never mistaken for a real target.
+        self.simulated = True
         self._chip = chip
         self._fw_version = fw_version
         self._core = core

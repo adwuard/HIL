@@ -103,3 +103,62 @@ def load_registry(extra_dirs: tuple[Path, ...] = ()) -> dict[str, Device]:
             device = load_device_file(path)
             devices[device.slug] = device
     return devices
+
+
+# -- conservative *IDN? -> registry device matching --------------------------
+def _norm(text: str) -> str:
+    """Uppercase and strip everything but ``A-Z0-9`` for robust comparisons."""
+    return re.sub(r"[^A-Z0-9]", "", (text or "").upper())
+
+
+# Predecessor vendors an instrument may still report in *IDN? (rebrands).
+_VENDOR_ALIASES: dict[str, tuple[str, ...]] = {
+    "KEYSIGHT": ("AGILENT", "HEWLETTPACKARD", "HP"),
+    "AGILENT": ("HEWLETTPACKARD", "HP"),
+}
+
+# Leading tokens some vendors prepend to the model field in *IDN?.
+_MODEL_PREFIXES = ("MODELNO", "MODEL", "PARTNUMBER", "PARTNO", "PN")
+
+
+def _strip_model_prefix(norm_model: str) -> str:
+    for prefix in _MODEL_PREFIXES:
+        if norm_model.startswith(prefix) and len(norm_model) > len(prefix):
+            return norm_model[len(prefix):]
+    return norm_model
+
+
+def match_device_by_idn(idn: str, devices: dict[str, Device]) -> Device | None:
+    """Conservatively map an ``*IDN?`` string to a registry :class:`Device`.
+
+    A match requires the registry manufacturer to appear inside the *IDN?*
+    manufacturer (or a known predecessor alias) **and** the model to be equal
+    after normalising away punctuation, spacing and a leading ``MODEL``/``P/N``
+    token. A vendor-only overlap (e.g. an unknown Keysight model hitting the
+    Keysight profile) is deliberately rejected, so auto-binding a safety policy
+    can never attach the *wrong* profile to live hardware. Returns ``None`` when
+    nothing matches confidently.
+    """
+    fields = [p.strip() for p in (idn or "").split(",")]
+    while len(fields) < 2:
+        fields.append("")
+    idn_mfr, idn_model = fields[0], fields[1]
+    if not idn_mfr or not idn_model:
+        return None
+    n_idn_mfr = _norm(idn_mfr)
+    n_idn_model = _norm(idn_model)
+    idn_models = {n_idn_model, _strip_model_prefix(n_idn_model)}
+    idn_models.discard("")
+    if not n_idn_mfr or not idn_models:
+        return None
+    for dev in devices.values():
+        n_dev_mfr = _norm(dev.manufacturer)
+        n_dev_model = _norm(dev.model)
+        if not n_dev_mfr or not n_dev_model:
+            continue
+        mfr_ok = n_dev_mfr in n_idn_mfr
+        if not mfr_ok:
+            mfr_ok = any(_norm(a) in n_idn_mfr for a in _VENDOR_ALIASES.get(n_dev_mfr, ()))
+        if mfr_ok and n_dev_model in idn_models:
+            return dev
+    return None
