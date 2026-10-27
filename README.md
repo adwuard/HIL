@@ -309,6 +309,38 @@ no probe needed). On top of either wire you get SEGGER **RTT** for logs,
 **GDB** for interactive sessions, and the same flash / erase / halt / step /
 memory / register surface.
 
+**Supported debuggers & flashers.** HIL is backend-agnostic — it drives whichever
+probe tool is installed and shells out to it (so nothing copyleft links into HIL):
+
+| Backend | Probe hardware it drives | Targets | Wire |
+| --- | --- | --- | --- |
+| **probe-rs** *(default)* | CMSIS-DAP / DAPLink, ST-Link, J-Link, ESP USB-JTAG, Black Magic, FTDI | Cortex-M (STM32, nRF52, RP2040 …), RISC-V, ESP32-C3/S3 | SWD · JTAG |
+| **pyOCD** | CMSIS-DAP / DAPLink, ST-Link, J-Link | Cortex-M | SWD · JTAG |
+| **OpenOCD** | FTDI, ST-Link, J-Link, CMSIS-DAP | Cortex-M, RISC-V, AVR … | JTAG · SWD |
+| **esptool** | native USB / UART — no probe | ESP8266 · ESP32 | serial ROM bootloader |
+| **stlink** | ST-Link | STM32 | SWD |
+
+**Real multi-probe benches.** `hil debug probe` enumerates *every* attached
+debugger at once and parses each into structured `name` / `type` / `vid` / `pid` /
+`serial` / `interface` fields, so probes are recognized by name — no hand-matching
+hex IDs. Real output from a bench with a DAPLink, an ST-Link V3 and an ESP32's
+native USB-JTAG all plugged in:
+
+```bash
+$ hil debug probe debug://probe-rs
+3 probe(s):
+  [0] DAPLink CMSIS-DAP  (CMSIS-DAP)  sn 0720…9908
+  [1] STLink V3          (ST-LINK)    sn 0026…3451
+  [2] ESP JTAG           (EspJtag)    sn 70:XX:XX:XX:XX:90
+```
+
+With several attached, drive a specific one by serial (or `VID:PID`) via `&probe=`;
+`--json` returns the same list machine-readably for an agent to pick from:
+
+```bash
+$ hil debug info "debug://probe-rs?target=nRF52832_xxAA&probe=0026000541XXXXXX0353451"
+```
+
 The imperative CLI mirrors the facade — every verb also takes `--json`, and `--sim`
 runs the whole surface on the in-memory target with no probe attached:
 

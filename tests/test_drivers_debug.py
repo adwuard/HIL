@@ -23,6 +23,7 @@ from hil.drivers.debug import (
     _as_int,
     _hex,
     _parse_hex_words,
+    _parse_probe_list,
     debug_driver,
     route_auto,
 )
@@ -51,6 +52,31 @@ def test_parse_hex_words_drops_addr_and_ascii_gutter():
     assert _parse_hex_words("08000000:  20002000 08000151  |.... ....|") == [0x20002000, 0x08000151]
     # esptool "addr = value" shape keeps both hex tokens, drops the '='
     assert _parse_hex_words("40000000 = 71") == [0x40000000, 0x71]
+
+
+def test_parse_probe_list_ignores_no_probe_notice():
+    # probe-rs prints this and exits 0 when nothing is attached — it must NOT
+    # become a phantom probe (regression: the driver used to wrap every line).
+    assert _parse_probe_list("No debug probes were found.", "probe-rs") == []
+    assert _parse_probe_list("", "probe-rs") == []
+
+
+def test_parse_probe_list_extracts_enumerated_probe():
+    # probe-rs 0.32: "[i]: NAME -- VID:PID[-IFACE]:SERIAL (TYPE)" — both a
+    # DAPLink (with an interface number) and an ST-Link (without) must parse
+    # into clean name/type/serial so they're tellable apart without VID:PID.
+    out = ("The following debug probes were found:\n"
+           "[0]: DAPLink CMSIS-DAP -- 0d28:0204-3:072000010034 (CMSIS-DAP)\n"
+           "[1]: STLink V3 -- 0483:3754:002600054142501920353451 (ST-LINK)")
+    probes = _parse_probe_list(out, "probe-rs")
+    assert len(probes) == 2
+    dap, stl = probes
+    assert (dap["index"], dap["name"], dap["type"]) == (0, "DAPLink CMSIS-DAP", "CMSIS-DAP")
+    assert dap["vid"] == "0d28" and dap["pid"] == "0204"
+    assert dap["interface"] == 3 and dap["serial"] == "072000010034"
+    assert (stl["index"], stl["name"], stl["type"]) == (1, "STLink V3", "ST-LINK")
+    assert stl["vid"] == "0483" and stl["pid"] == "3754"
+    assert stl["serial"] == "002600054142501920353451" and "interface" not in stl
 
 
 def test_route_auto_picks_tool_by_chip_family():
@@ -232,18 +258,30 @@ def test_instrument_safety_policy_is_enforced(tmp_path):
 def test_probe_rs_command_builders():
     be = ToolBackend("probe-rs", chip="nrf52840")
     assert be._command("probe_list") == ["probe-rs", "list"]
+    # HIL forwards transport=swd (probe-rs defaults an ST-Link/CMSIS-DAP to JTAG,
+    # which fails the nRF52 DP IDCODE read).
     assert be._command("flash", firmware="app.hex") == \
-        ["probe-rs", "download", "--chip", "nrf52840", "app.hex"]
-    assert be._command("erase") == ["probe-rs", "erase", "--chip", "nrf52840"]
-    assert be._command("reset") == ["probe-rs", "reset", "--chip", "nrf52840"]
-    assert be._command("rtt") == ["probe-rs", "attach", "--chip", "nrf52840"]
+        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd", "app.hex"]
+    assert be._command("erase") == \
+        ["probe-rs", "erase", "--chip", "nrf52840", "--protocol", "swd"]
+    assert be._command("reset") == \
+        ["probe-rs", "reset", "--chip", "nrf52840", "--protocol", "swd"]
+    assert be._command("rtt") == \
+        ["probe-rs", "attach", "--chip", "nrf52840", "--protocol", "swd"]
     assert be._command("read_mem", addr="0x20000000") is None   # not supported
+
+
+def test_probe_rs_command_forwards_transport_and_speed():
+    # transport=jtag + speed must reach probe-rs as --protocol/--speed.
+    be = ToolBackend("probe-rs", chip="nrf52832_xxaa", transport="jtag", speed=1000)
+    assert be._command("reset") == \
+        ["probe-rs", "reset", "--chip", "nrf52832_xxaa", "--protocol", "jtag", "--speed", "1000"]
 
 
 def test_probe_rs_command_includes_probe_serial():
     be = ToolBackend("probe-rs", chip="nrf52840", probe="0001")
     assert be._command("flash", firmware="app.hex") == \
-        ["probe-rs", "download", "--chip", "nrf52840", "--probe", "0001", "app.hex"]
+        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd", "--probe", "0001", "app.hex"]
 
 
 def test_openocd_command_builders():

@@ -126,6 +126,60 @@ def _parse_hex_words(text: str) -> list[int]:
     return words
 
 
+_PROBE_NOISE = re.compile(
+    r"no debug probes|no probes|following (?:debug )?probes|probes? (?:were|was) "
+    r"found|^info\b|^warning\b|^error\b", re.IGNORECASE)
+
+# probe-rs 0.32 enumerates each probe as ``[i]: NAME -- VID:PID[-IFACE]:SERIAL (TYPE)``, e.g.
+#   [0]: DAPLink CMSIS-DAP -- 0d28:0204-3:0720..908 (CMSIS-DAP)
+#   [1]: STLink V3 -- 0483:3754:0026..451 (ST-LINK)
+# Lifting NAME/TYPE/SERIAL out lets the CLI (and an agent) recognize and pick a
+# debugger by name or serial instead of hand-matching raw VID:PID.
+_PROBE_RS_ENTRY = re.compile(
+    r"^\[(\d+)\]:\s*(?P<name>.+?)\s+--\s+"
+    r"(?P<vid>[0-9a-fA-F]{4}):(?P<pid>[0-9a-fA-F]{4})"
+    r"(?:-(?P<iface>\d+))?:(?P<serial>\S+?)"
+    r"(?:\s+\((?P<type>[^)]+)\))?\s*$")
+
+
+def _parse_probe_list(text: str, tool: str) -> list[dict]:
+    """Best-effort parse of a debug tool's ``probe list`` output into probes.
+
+    Tools print a header ("The following debug probes were found:") or a
+    "No debug probes were found." notice — neither is a probe, and that notice
+    exits 0, so wrapping every line would fabricate a phantom probe. probe-rs
+    enumerates real entries as ``[i]: NAME -- VID:PID[-IFACE]:SERIAL (TYPE)``;
+    those are lifted into structured fields (name/type/vid/pid/serial) so each
+    debugger is recognizable without VID:PID matching. Other tools' lines fall
+    back to ``{name, index?}`` (noise stripped) so their output still round-trips.
+    """
+    probes: list[dict] = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line or _PROBE_NOISE.search(line):
+            continue
+        m = _PROBE_RS_ENTRY.match(line)
+        if m:
+            probe: dict[str, Any] = {"tool": tool, "index": int(m.group(1)),
+                                     "name": m.group("name").strip()}
+            if m.group("type"):
+                probe["type"] = m.group("type").strip()
+            probe["vid"] = m.group("vid")
+            probe["pid"] = m.group("pid")
+            if m.group("iface"):
+                probe["interface"] = int(m.group("iface"))
+            probe["serial"] = m.group("serial")
+            probes.append(probe)
+            continue
+        probe = {"tool": tool, "name": line}
+        g = re.match(r"^\[(\d+)\]\s*[:\-]?\s*(.*)$", line)
+        if g:
+            probe["index"] = int(g.group(1))
+            probe["name"] = g.group(2).strip() or line
+        probes.append(probe)
+    return probes
+
+
 def route_auto(target: str = "", chip: str = "") -> str:
     """Pick a debug tool for ``debug://auto`` from the chip family (spec §5.4.5)."""
     t = (target or chip or "").lower()
@@ -393,8 +447,16 @@ class ToolBackend:
 
         if tool == "probe-rs":
             common = ["--chip", chip] if chip else []
+            # probe-rs defaults an ST-Link/CMSIS-DAP probe to JTAG; nRF52 and most
+            # Cortex-M parts are wired for SWD, so forward the URL transport
+            # (debug://...?transport=swd|jtag) or the DP IDCODE read fails with
+            # JtagGetIdcodeError. --speed is passed through when given.
+            if self.transport:
+                common += ["--protocol", self.transport]
             if kw.get("probe") or self.probe:
                 common += ["--probe", str(kw.get("probe") or self.probe)]
+            if self.speed:
+                common += ["--speed", str(self.speed)]
             if action == "probe_list":
                 return [b, "list"]
             if action == "flash":
@@ -543,8 +605,7 @@ class ToolBackend:
         res = self._run(argv)
         if res.get("rc") not in (0, None):
             raise HilError(f"debug driver: {self.tool} probe listing failed: {_tail(res)}")
-        return [{"name": ln.strip(), "tool": self.tool}
-                for ln in res["output"].splitlines() if ln.strip()]
+        return _parse_probe_list(res["output"], self.tool)
 
     def target_info(self) -> dict:
         info: dict[str, Any] = {"tool": self.tool, "chip": self.chip, "target": self.target,
