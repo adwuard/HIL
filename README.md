@@ -67,7 +67,8 @@ agent needs to operate real instruments autonomously.
   hardware, so plans are validated before they touch a real device.
 - **Plans as data.** A test is a versionable YAML procedure — auditable, reproducible,
   diffable — which is exactly how you want an agent's intent recorded.
-- **MCP server (roadmap).** The same primitives, exposed as native model tools.
+- **MCP server.** The same primitives, exposed as native model tools any coding
+  agent (Claude Code, Codex, Cursor, …) can call — see the **MCP server** section.
 
 ## Use it
 
@@ -382,6 +383,65 @@ See `examples/bench/cortex-m-flash-debug.yaml` for a runnable version of this pi
 > once — an SMU powering the DUT while a probe flashes it and a logic analyzer
 > watches I²C (PRD Appendix D) — isn't wired into one procedure yet; sequence those
 > as separate runs or drive them from Python.
+
+## MCP server — drive HIL from any coding agent
+
+HIL ships a **local MCP server** so an agent can drive the bench directly — the same
+tools the CLI uses, exposed over the [Model Context Protocol](https://modelcontextprotocol.io).
+It runs on **stdio** (what every local coding agent spawns) or loopback HTTP, and
+talks to the instruments and debug probes attached to *this* host. Nothing is proxied
+to the cloud and no port is exposed beyond `127.0.0.1`.
+
+```bash
+pip install 'hil-harness[mcp]'   # add the MCP SDK (works with mcp 1.x and 2.x)
+
+hil mcp                          # run the server over stdio (what an agent spawns)
+hil mcp install                  # register it globally in every detected agent
+hil mcp install --agent codex    # …or one agent (claude-code, codex, cursor, windsurf, cline)
+hil mcp install --dry-run        # preview the config changes, write nothing
+hil mcp config                   # print the snippet to paste yourself
+```
+
+`hil mcp install` merges a single `hil` entry into each agent's **user-level** config
+— `~/.claude.json`, `~/.codex/config.toml`, `~/.cursor/mcp.json`, … — so the tools are
+available in *every* project, not just this one. It preserves whatever is already
+there, is idempotent (re-running updates, never duplicates), and bakes your `PATH`
+into the server env so GUI-launched agents still find `probe-rs`, `openocd`, `esptool`
+and `gdb`. Prefer the official route? Claude Code also accepts:
+
+```bash
+claude mcp add --scope user hil -- hil mcp
+```
+
+### The tools
+
+| Tool | What it does |
+| --- | --- |
+| `hil_doctor` | Bench readiness: version, importable backends, device count, provisioning hints |
+| `hil_devices` / `hil_device` | Search the registry / fetch one device's full profile (capabilities, commands, safety policy) |
+| `hil_probe` | Connectivity check — `*IDN?` + `*OPC?`, parsed identity |
+| `hil_exec` | Run SCPI commands (a trailing `?` queries); safety policy enforced; one structured result per command |
+| `hil_errors` | Drain the instrument's `SYST:ERR?` queue |
+| `hil_capture` | Sample a channel for N seconds → summary stats (mean/min/max/p95/rate), optional NDJSON dump |
+| `hil_debug_probe` | List attached debug probes (name/type/serial) — no target needed |
+| `hil_debug` | Flash / erase / reset / halt / step / read / write / RTT / GDB against a `debug://` target |
+| `hil_setup` | Check or plan backend provisioning (dry-run by default; never silently installs system packages) |
+
+Every tool returns a JSON object with an `ok` flag — on failure `ok:false` plus an
+`error` message rather than a transport-level crash, so the model always gets
+parseable facts. The registry is also exposed as MCP **resources**: `hil://devices`
+(index) and `hil://devices/{slug}` (full profile). A typical agent turn is just tool
+calls, no HIL-specific glue:
+
+```text
+agent → hil_debug_probe()                          # what's attached?
+      ← {ok, probes:[{name:"STLink V3", type:"ST-LINK", serial:"0026…"}, …]}
+agent → hil_debug("debug://probe-rs?target=nRF52832_xxAA&transport=swd&probe=0026…",
+                  "flash", firmware="build/app.hex", verify=true)
+      ← {ok, tool:"probe-rs", sha256:"…", verified:true, size_bytes:…}
+agent → hil_debug(<same target>, "read", address="0x10000000", count=4)   # FICR
+      ← {ok, values:[…], hex:["0x…", …]}
+```
 
 ## Optional device backends — `hil setup`
 
@@ -833,14 +893,16 @@ pip install -e '.[dev]'                                  # editable + test deps
 ```
 
 Extras: `.[serial]` (RS-232), `.[visa]` (GPIB / VISA / USB), `.[atk]` (ALIENTEK
-ATK-Logic analyzer, in-process), `.[ppk2]` (Nordic PPK2 backend, GPLv2), `.[all]`,
-`.[dev]`. Python 3.10+. Core requires only PyYAML.
+ATK-Logic analyzer, in-process), `.[ppk2]` (Nordic PPK2 backend, GPLv2), `.[mcp]`
+(MCP server for coding agents), `.[all]`, `.[dev]`. Python 3.10+. Core requires
+only PyYAML.
 
 ## Status
 
 **v0.1.0** — transports, SCPI layer, a pluggable instrument/driver registry (with
 non-SCPI PPK2, logic-analyzer and flash/debug drivers), telemetry (logging +
 analytics), bench (incl. `build` / `flash` / `debug` steps), on-demand backend
-provisioning (`hil setup`), and CLI are live and tested. The MCP server and a PyPI
-release as `hil-harness` are next.
+provisioning (`hil setup`), an **MCP server** (`hil mcp` — drive the bench from
+Claude Code, Codex, Cursor and more), and CLI are live and tested. A PyPI release
+as `hil-harness` is next.
 MIT licensed.

@@ -20,8 +20,11 @@ usb = ["python-usbtmc>=0.8", "pyusb>=1.2"]
 atk = ["pyusb>=1.2"]
 # PPK2 backend is GPLv2 and user-installed; HIL's MIT core only wraps it.
 ppk2 = ["ppk2-api>=0.9"]
-all = ["hil-harness[serial,visa,usb,atk]"]
-dev = ["pytest>=8.0", "hil-harness[serial]"]
+# MCP server (`hil mcp`): expose HIL's tools to coding agents (Claude Code, Codex,
+# Cursor, …) over stdio/loopback. Works with mcp 1.x (FastMCP) and 2.x (MCPServer).
+mcp = ["mcp>=1.2"]
+all = ["hil-harness[serial,visa,usb,atk,mcp]"]
+dev = ["pytest>=8.0", "hil-harness[serial,mcp]"]
 
 [project.scripts]
 hil = "hil.cli:main"

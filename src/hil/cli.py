@@ -100,6 +100,8 @@ def _build_parser() -> argparse.ArgumentParser:
                    help="print the exact commands without running them")
     p.add_argument("--yes", action="store_true",
                    help="allow privileged steps (sudo/brew/apt native installs)")
+
+    _add_mcp_parser(sub, sub_common)
     return parser
 
 
@@ -422,6 +424,45 @@ def _add_atklogic_parser(
     sp.add_argument("--channels", default="", help="channel subset, e.g. '0,1' (default: all in file)")
     sp.add_argument("--fmt", default="csv", choices=("csv", "raw"), help="target format (default csv)")
     sp.add_argument("--out", required=True, help="output path")
+
+
+def _add_mcp_parser(
+    sub: argparse._SubParsersAction, sub_common: argparse.ArgumentParser
+) -> None:
+    """`hil mcp [install|config]` — run the HIL MCP server and register it globally.
+
+    With no subcommand ``hil mcp`` serves HIL's tools over stdio (what a coding
+    agent spawns) or loopback HTTP. ``install`` merges the server into detected
+    agents' USER-LEVEL config so it's available in every project; ``config`` prints
+    the snippet to paste by hand.
+    """
+    p = sub.add_parser(
+        "mcp",
+        help="run/register the HIL MCP server for coding agents (Claude Code, Codex, Cursor, …)",
+        parents=[sub_common],
+    )
+    p.add_argument("--transport", default="stdio",
+                   choices=("stdio", "http", "streamable-http", "sse"),
+                   help="stdio (default; what agents spawn) or loopback http/sse")
+    p.add_argument("--host", default="127.0.0.1",
+                   help="bind host for --transport http (default 127.0.0.1, loopback only)")
+    p.add_argument("--port", type=int, default=8765,
+                   help="bind port for --transport http (default 8765)")
+    msub = p.add_subparsers(dest="mcp_cmd")
+
+    mi = msub.add_parser("install", help="register HIL in agents' global MCP config",
+                         parents=[sub_common])
+    mi.add_argument("--agent", default="",
+                    help="target one agent (claude-code, codex, cursor, windsurf, cline); "
+                         "default: every detected agent")
+    mi.add_argument("--dry-run", action="store_true", help="show what would change; write nothing")
+    mi.add_argument("--no-path", action="store_true",
+                    help="don't bake the current PATH into the server env")
+
+    mc = msub.add_parser("config", help="print the registration snippet to paste manually",
+                         parents=[sub_common])
+    mc.add_argument("--agent", default="", help="snippet for one agent (default: all)")
+    mc.add_argument("--no-path", action="store_true", help="omit PATH from the snippet env")
 
 
 # -- output helpers -----------------------------------------------------------
@@ -774,7 +815,16 @@ def _debug_dispatch(action: str, args: argparse.Namespace, inst) -> tuple[dict, 
     if action == "probe":
         probes = inst.probe_list()
         lines = [f"{len(probes)} probe(s)" + (":" if probes else "")]
-        lines += [f"  {p.get('name') or p.get('id') or p}" for p in probes]
+        for i, p in enumerate(probes):
+            if not isinstance(p, dict):
+                lines.append(f"  {p}")
+                continue
+            label = f"  [{p.get('index', i)}] {p.get('name') or p.get('id') or 'probe'}"
+            if p.get("type"):
+                label += f"  ({p['type']})"
+            if p.get("serial"):
+                label += f"  sn {p['serial']}"
+            lines.append(label)
         return {"ok": True, "probes": probes}, "\n".join(lines)
 
     if action == "info":
@@ -1202,6 +1252,47 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """`hil mcp [install|config]` — serve HIL over MCP and/or register it globally."""
+    from . import mcp_server
+
+    subcmd = getattr(args, "mcp_cmd", None)
+    include_path = not getattr(args, "no_path", False)
+
+    if subcmd == "config":
+        print(mcp_server.config_snippet(
+            agent=getattr(args, "agent", ""), include_path=include_path))
+        return 0
+
+    if subcmd == "install":
+        report = mcp_server.install(
+            agent=getattr(args, "agent", ""),
+            dry_run=getattr(args, "dry_run", False),
+            include_path=include_path,
+        )
+        ok = report.get("ok", True)
+        if getattr(args, "json", False):
+            print(json.dumps(report, indent=2))
+            return 0 if ok else 1
+        targets = report.get("targets") or []
+        if not targets:
+            print(report.get("note") or "no supported agent config detected")
+            return 0
+        verb = "would register" if report.get("dry_run") else "registered"
+        for t in targets:
+            if not t.get("ok"):
+                print(f"  [skip] {t['agent']}: {t.get('error')}")
+            else:
+                print(f"  {verb} 'hil' in {t['agent']}  ({t.get('changed')})  ->  {t['path']}")
+        print("\nRestart the agent to load the HIL tools. Prefer to paste it yourself? "
+              "Run `hil mcp config`.")
+        return 0 if ok else 1
+
+    # No subcommand: run the server (stdio by default; loopback http/sse optional).
+    mcp_server.run(transport=args.transport, host=args.host, port=args.port)
+    return 0
+
+
 _COMMANDS = {
     "probe": cmd_probe,
     "idn": cmd_idn,
@@ -1216,6 +1307,7 @@ _COMMANDS = {
     "analyze": cmd_analyze,
     "doctor": cmd_doctor,
     "setup": cmd_setup,
+    "mcp": cmd_mcp,
 }
 
 
