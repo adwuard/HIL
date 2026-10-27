@@ -27,3 +27,13 @@ third_party/work/
 
 specs.md
 .cc-history/
+
+# installed agent skills (build-time tools for the landing page; not committed)
+.claude/
+.agents/
+skills-lock.json
+.hallmark/
+
+# landing-page build/verification output
+site/bench/node_modules/
+shots/

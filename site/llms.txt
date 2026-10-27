@@ -1,0 +1,52 @@
+# HIL — Hardware-in-the-Loop testing for lab instruments
+
+> HIL (hil-harness) is a Python hardware-in-the-loop testing harness that drives
+> lab instruments — SCPI devices plus power profilers, logic analyzers and
+> on-chip flash/debug probes — from one Python API, one CLI and one MCP server,
+> with a safety policy on every device profile.
+
+- Repository: https://github.com/adwuard/HIL
+- Site: https://hsuanhanlai.com/HIL/
+- License: MIT · Version: 0.1.0 · Python 3.10+ · Author: Hsuan Han Lai
+
+## Facts
+
+- Corpus: 725 instruments, 7 vendors, ~294k SCPI commands (Keysight 279, Rigol 211, Keithley 85, Tektronix 84, EA 29, Rohde & Schwarz 22, B&K 15).
+- Eight curated profiles load by default with safety policies: keithley-2400, rigol-dho1072, keysight-ac6801b, ea-el9000b, nordic-ppk2, alientek-atk-logic, generic-cortex-m, esp32-devkit.
+- Drivers: scpi, ppk2 (Nordic Power Profiler Kit II), logic (ALIENTEK ATK-Logic), debug (probe-rs, pyOCD, OpenOCD, esptool, stlink).
+- Addressing: tcp://, serial://, visa://, ppk2://, logic://, debug:// or a registry slug.
+- Safety by default: each profile carries a policy (block / allow / limits); the bench refuses blocked commands.
+- Simulator: dry-run any YAML procedure with `hil bench run <plan>.yaml --sim`; validate statically with `hil bench validate`.
+- Agent-ready: every CLI command emits stable `--json`; the MCP server exposes hil_doctor, hil_devices, hil_device, hil_probe, hil_exec, hil_errors, hil_capture, hil_debug_probe, hil_debug, hil_setup. Every tool returns JSON with an `ok` flag.
+
+## Install
+
+```
+pip install git+https://github.com/adwuard/HIL.git
+pip install 'hil-harness[mcp]'   # MCP server extra
+hil mcp install                  # register with your coding agent
+hil doctor                       # bench readiness
+hil setup <slug>                 # provision an optional backend, e.g. ppk2
+```
+
+Extras: .[serial] .[visa] .[atk] .[ppk2] .[mcp] .[all] .[dev]
+
+## Quick start
+
+```
+from hil import connect
+smu = connect("keithley-2400")          # registry slug -> safety policy attached
+print(smu.query(":MEAS:VOLT?"))
+```
+
+```
+hil idn tcp://192.168.1.5:5025          # identify
+hil ask keithley-2400 ":MEAS:VOLT?"     # query (safety-checked)
+hil bench run plan.yaml --sim           # dry-run on the simulator
+```
+
+## Links
+
+- README: https://github.com/adwuard/HIL#readme
+- Docs: https://github.com/adwuard/HIL/tree/main/docs
+- Issues: https://github.com/adwuard/HIL/issues
