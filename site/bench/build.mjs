@@ -20,8 +20,12 @@ const DECK = { x: -212, y: -152, w: 424, d: 302, r: 16 };
 const DECK_H = 20;
 const FOOT_H = 12;
 
-const AGENT = { x: -184, y: -124, w: 78, d: 56, r: 5 };
-const AGENT_H = 26;
+// the agent is a laptop: a thin keyboard deck plus a raked lid with a live screen
+const AGENT = { x: -190, y: -126, w: 88, d: 62, r: 4 };
+const BASE_H = 4;
+const LID_TILT = 0.22;
+const LID_H = 46;
+const AGENT_H = BASE_H;
 const HUB = { x: -70, y: -126, w: 152, d: 62, r: 6 };
 const HUB_H = 30;
 
@@ -29,6 +33,8 @@ const SLOT_A = { x: 96, y: -122, w: 106, d: 68, r: 5 };   // right, back
 const SLOT_B = { x: 78, y: 4, w: 120, d: 82, r: 6 };      // right, front
 const SLOT_C = { x: -198, y: 0, w: 100, d: 80, r: 5 };    // left, front
 const DUT = { x: -58, y: 38, w: 100, d: 68, r: 3 };       // front, centre
+const POD = { x: -168, y: -40, w: 54, d: 38, r: 4 };      // debug probe pod, mid-left
+const DISP = { x: -14, y: -40, w: 60, d: 44, r: 2 };      // i2c display panel, centre
 
 const P = k.fitProjection(
   [...k.boxCorners(DECK, -(DECK_H + FOOT_H), 0), [HUB.x + 20, HUB.y + 10, 62], [SLOT_A.x + 40, SLOT_A.y + 10, 62]],
@@ -99,12 +105,58 @@ function knob(x, y, z, r) {
   ].join("");
 }
 
-function agent(pt) {
-  const g = [S(k.slabOf(AGENT, 0, AGENT_H, P, 6, 0.7), { tone: "mid" })];
-  g.push(L(k.planOutline(k.insetPlan(AGENT, 3), AGENT_H, P, 6), { tone: "faint" }));
-  g.push(screenOn(AGENT, AGENT_H, "agent", { tone: "lit", w: AGENT.w - 18, h: 24, size: 5 }).svg);
-  g.push(D([at([AGENT.x + 9, AGENT.y + AGENT.d - 9, AGENT_H + 0.4])], { size: 1.1, tone: "lit", pulse: true }));
-  pt.put(`<g data-part="agent">${g.join("")}</g>`, centre(AGENT).concat(0));
+function agent(pt, id = "agent", attrs = "") {
+  // keyboard deck
+  const g = [S(k.slabOf(AGENT, 0, BASE_H, P, 6, 0.6), { tone: "mid" })];
+  const keys = [];
+  for (let r = 0; r < 4; r++) for (let c = 0; c < 10; c++) keys.push(`<rect x="${7 + c * 8.2}" y="${8 + r * 6.4}" width="6.4" height="4.4" rx="0.8"/>`);
+  keys.push(`<rect x="${AGENT.w / 2 - 11}" y="35" width="22" height="14" rx="1.4" fill="none" stroke-width="0.5"/>`);
+  g.push(`<g transform="${k.topMatrix([AGENT.x, AGENT.y], BASE_H + 0.15, P, "x")}" style="fill:var(--anatomy-face);stroke:var(--anatomy-faint)">${keys.join("")}</g>`);
+  // lid: a thin raked box hinged at the back edge of the deck
+  const st = Math.sin(LID_TILT), ct = Math.cos(LID_TILT);
+  const x0 = AGENT.x + 5, x1 = AGENT.x + AGENT.w - 5, yh = AGENT.y + 4;
+  const u = [0, -st, ct], wv = [0, ct * 2.4, st * 2.4];
+  const add = (p, q) => [p[0] + q[0], p[1] + q[1], p[2] + q[2]];
+  const mul = (q, t) => [q[0] * t, q[1] * t, q[2] * t];
+  const S1 = [x0, yh, BASE_H], S2 = [x1, yh, BASE_H];
+  const S3 = add(S2, mul(u, LID_H)), S4 = add(S1, mul(u, LID_H));
+  const B2 = add(S2, wv), B3 = add(S3, wv), B4 = add(S4, wv);
+  const poly = (pts) => "M" + pts.map((p) => at(p).map((n) => n.toFixed(1)).join(" ")).join("L") + "Z";
+  const seg = (a, b) => "M" + at(a).map((n) => n.toFixed(1)).join(" ") + "L" + at(b).map((n) => n.toFixed(1)).join(" ");
+  g.push(`<path class="iso-fill" d="${poly([S1, S2, B2, B3, B4, S4])}"/>`);
+  g.push(`<path class="iso-shade" data-shade="3" d="${poly([S1, S2, S3, S4])}"/>`);
+  g.push(`<path class="iso-shade" data-shade="0" d="${poly([S2, B2, B3, S3])}"/>`);
+  g.push(`<path class="iso-shade" data-shade="1" d="${poly([S4, S3, B3, B4])}"/>`);
+  g.push(L(poly([S1, S2, B2, B3, B4, S4]) + seg(S2, S3) + seg(S4, S3), { tone: "mid" }));
+  // screen glass: an agent CLI session in the lid's own plane, prompt chevron,
+  // a task list with done checks, one spinning step, pending boxes, progress rail
+  const ax = k.axisVector(P, [1, 0, 0]);
+  const ay = k.axisVector(P, mul(u, -1));
+  const o = at(S4);
+  const M = `matrix(${ax[0].toFixed(3)} ${ax[1].toFixed(3)} ${ay[0].toFixed(3)} ${ay[1].toFixed(3)} ${o[0].toFixed(1)} ${o[1].toFixed(1)})`;
+  const LW = x1 - x0;
+  const GW = LW - 5, GH = LID_H - 5;
+  const cli = [];
+  cli.push(`<path d="M6 6.4l2.6 1.8-2.6 1.8" fill="none" stroke-width="1.1" style="stroke:var(--anatomy-lit)"/>`);
+  cli.push(`<rect x="10.6" y="7.3" width="30" height="1.8" rx="0.6" style="fill:var(--anatomy-blue)"/>`);
+  cli.push(`<rect class="agent-caret" x="42.2" y="7.3" width="2.2" height="1.8" style="fill:var(--anatomy-lit)"/>`);
+  const tasks = [["done", 26], ["done", 34], ["run", 30], ["wait", 22], ["wait", 16]];
+  tasks.forEach(([state, w], i) => {
+    const y = 14 + i * 5.2;
+    const box = state === "done"
+      ? `<rect x="6" y="${(y - 1.7).toFixed(1)}" width="3.4" height="3.4" rx="0.8" fill="none" stroke-width="0.7" style="stroke:var(--anatomy-green)"/><path d="M6.9 ${(y - 0.2).toFixed(1)}l0.9 1 1.7 -2" fill="none" stroke-width="0.8" style="stroke:var(--anatomy-green)"/>`
+      : state === "run"
+        ? `<circle class="agent-spin" cx="7.7" cy="${y}" r="1.7" fill="none" stroke-width="0.9" stroke-dasharray="8 2.7" style="stroke:var(--anatomy-lit)"/>`
+        : `<rect x="6" y="${(y - 1.7).toFixed(1)}" width="3.4" height="3.4" rx="0.8" fill="none" stroke-width="0.7" style="stroke:var(--anatomy-faint)"/>`;
+    const tone = state === "run" ? "hi" : "mid";
+    const op = state === "wait" ? ' opacity="0.55"' : "";
+    cli.push(box + `<rect x="12" y="${(y - 0.9).toFixed(1)}" width="${w}" height="1.8" rx="0.6"${op} style="fill:var(--anatomy-${tone})"/>`);
+  });
+  cli.push(`<rect x="6" y="38.6" width="${GW - 12}" height="1.2" rx="0.6" opacity="0.35" style="fill:var(--anatomy-mid)"/>`);
+  cli.push(`<rect x="6" y="38.6" width="${((GW - 12) * 0.55).toFixed(1)}" height="1.2" rx="0.6" style="fill:var(--anatomy-lit)"/>`);
+  g.push(`<g transform="${M}"><rect x="2.5" y="2.5" width="${GW}" height="${GH}" rx="1.6" style="fill:var(--anatomy-page)"/>${cli.join("")}<rect x="2.5" y="2.5" width="${GW}" height="${GH}" rx="1.6" fill="none" stroke-width="0.5" style="stroke:var(--anatomy-lo)"/></g>`);
+  g.push(D([at(add(add(S1, mul(u, LID_H - 7)), [LW - 7, 0, 0]))], { size: 1.1, tone: "lit", pulse: true }));
+  pt.put(`<g data-part="${id}"${attrs}>${g.join("")}</g>`, centre(AGENT).concat(0));
 }
 
 function hub(pt) {
@@ -139,7 +191,7 @@ function pcb(pt, id, plan, o = {}) {
   g.push(S(k.slabOf({ x: plan.x + 9, y: plan.y + 9, w: 12, d: 7, r: 1 }, h, 3, P, 2), { tone: "hi" }));
   if (o.label) g.push(FT(k.topMatrix([cx, plan.y + plan.d - 15], h + 0.3, P, "x"), o.label, { size: 3.6, tone: o.labelTone || "mid", anchor: "middle" }));
   if (o.led) g.push(D([at([plan.x + plan.w - 8, plan.y + plan.d - 8, h + 0.5])], { size: 1, tone: o.led, pulse: true }));
-  pt.put(`<g data-part="${id}">${g.join("")}</g>`, [cx, cy, 0]);
+  pt.put(`<g data-part="${id}"${o.attrs || ""}>${g.join("")}</g>`, [cx, cy, 0]);
 }
 
 // A rack instrument: body + top screen + knobs + label + status LED.
@@ -161,7 +213,7 @@ function instrument(pt, id, plan, o = {}) {
   }
   if (o.label) g.push(FT(k.topMatrix([cx, plan.y + plan.d - 8], h + 0.3, P, "x"), o.label, { size: 3.8, tone: o.labelTone || "mid", anchor: "middle" }));
   if (o.led) g.push(D([at([plan.x + 9, plan.y + plan.d - 9, h + 0.4])], { size: 1, tone: o.led, pulse: true }));
-  pt.put(`<g data-part="${id}">${g.join("")}</g>`, [cx, cy, 0]);
+  pt.put(`<g data-part="${id}"${o.attrs || ""}>${g.join("")}</g>`, [cx, cy, 0]);
 }
 
 function wave(plan, z, tone = "blue") {
@@ -189,7 +241,7 @@ function artifact(pt, id, plan, o = {}) {
   const [cx, cy] = centre(plan);
   g.push(FT(k.topMatrix([cx, plan.y + plan.d - 7], h + 0.3, P, "x"), o.label || "artifact", { size: 3.4, tone: "mid", anchor: "middle" }));
   if (o.led) g.push(D([at([plan.x + plan.w - 8, plan.y + 8, h + 0.4])], { size: 0.9, tone: o.led, pulse: true }));
-  pt.put(`<g data-part="${id}">${g.join("")}</g>`, [cx, cy, 0]);
+  pt.put(`<g data-part="${id}"${o.attrs || ""}>${g.join("")}</g>`, [cx, cy, 0]);
 }
 
 // Cables: screen-space connectors with terminal dots and animated flow.
@@ -197,6 +249,31 @@ function cable(pt, fromWorld, toWorld, viaWorld, tone, bias = 0) {
   const svg = W(at(fromWorld), at(toWorld), { via: viaWorld.map((v) => at(v)), tone, flow: true, ends: "both", size: 1.5 });
   const mid = [(fromWorld[0] + toWorld[0]) / 2, (fromWorld[1] + toWorld[1]) / 2, (fromWorld[2] + toWorld[2]) / 2 + 6];
   pt.put(svg, mid, bias);
+}
+
+// A debug probe pod: small slab, SWD mark, attach LED.
+function probePod(pt, id, plan, attrs = "") {
+  const g = [S(k.slabOf(plan, 0, 10, P, 4, 0.8), { tone: "mid" })];
+  g.push(L(k.planOutline(k.insetPlan(plan, 3), 10, P, 4), { tone: "faint" }));
+  g.push(FT(k.topMatrix([centre(plan)[0], centre(plan)[1] + 1], 10.4, P, "x"), "swd", { size: 3.6, tone: "lit", anchor: "middle" }));
+  g.push(D([at([plan.x + 6, plan.y + 6, 10.4])], { size: 1, tone: "green", pulse: true }));
+  pt.put(`<g data-part="${id}"${attrs}>${g.join("")}</g>`, centre(plan).concat(0));
+}
+
+// An I2C OLED module: carrier pcb, glass panel, lit pixel cluster.
+function display(pt, id, plan, o = {}) {
+  const h = o.h || 4;
+  const g = [S(k.slabOf(plan, 0, h, P, 3, 0.5), { tone: "mid" })];
+  g.push(L(k.planOutline(k.insetPlan(plan, 2), h, P, 3), { tone: "faint" }));
+  const glass = { x: plan.x + 6, y: plan.y + 5, w: plan.w - 12, d: plan.d - 14, r: 1 };
+  g.push(S(k.slabOf(glass, h, 1.6, P, 2, 0.3), { tone: "lo" }));
+  const px = [];
+  for (let ix = 0; ix < 6; ix++) for (let iy = 0; iy < 3; iy++) {
+    if ((ix + iy) % 2 === 0) px.push(at([glass.x + 5 + ix * ((glass.w - 10) / 5), glass.y + 4 + iy * ((glass.d - 8) / 2), h + 1.8]));
+  }
+  g.push(D(px, { size: 0.6, tone: "lit" }));
+  if (o.label) g.push(FT(k.topMatrix([plan.x + plan.w / 2, plan.y + plan.d - 5], h + 0.3, P, "x"), o.label, { size: 3.2, tone: "mid", anchor: "middle" }));
+  pt.put(`<g data-part="${id}"${o.attrs || ""}>${g.join("")}</g>`, centre(plan).concat(0));
 }
 
 // ---- the four workbenches --------------------------------------------------
@@ -241,11 +318,19 @@ function sceneLogic() {
   cable(pt, [HUB.x + HUB.w - 8, HUB.y + 16, HUB_H], [SLOT_A.x + 18, SLOT_A.y + SLOT_A.d - 6, 26], [[92, -74, 36]], "blue", -0.5);
   cable(pt, [SLOT_A.x + 24, SLOT_A.y + SLOT_A.d - 4, 24], [DUT.x + 34, DUT.y + 8, 8], [[64, -4, 30]], "blue", 0.2);
   cable(pt, [HUB.x + HUB.w - 8, HUB.y + HUB.d - 12, HUB_H], [SLOT_B.x + 16, SLOT_B.y + 8, 14], [[86, -20, 30]], "blue", -0.5);
+  // debug link to the probe pod, then the SWD ribbon into the DUT
+  cable(pt, [HUB.x + 24, HUB.y + HUB.d - 4, HUB_H], [POD.x + POD.w - 10, POD.y + 4, 10], [[-84, -66, 26]], "blue", -0.5);
+  cable(pt, [POD.x + POD.w - 4, POD.y + POD.d - 8, 10], [DUT.x + 12, DUT.y + 6, 6], [[-88, 2, 16]], "blue", 0.2);
+  // i2c tap from the DUT to the display panel, GPIO trigger back to the analyzer
+  cable(pt, [DUT.x + 34, DUT.y + 2, 6], [DISP.x + 16, DISP.y + DISP.d - 2, 4], [[-12, 22, 10]], "blue", 0.3);
+  cable(pt, [DUT.x + DUT.w - 4, DUT.y + 16, 6], [SLOT_A.x + 6, SLOT_A.y + SLOT_A.d - 8, 24], [[76, 0, 26]], "lit", 0.3);
   agent(pt);
   hub(pt);
-  instrument(pt, "la", SLOT_A, { h: 26, screen: "4 MS/s", screenW: SLOT_A.w * 0.5, label: "atk-logic", led: "blue", knobs: [], buttons: 0 });
+  instrument(pt, "la", SLOT_A, { h: 26, screen: "ch0..2  4 MS/s", screenW: SLOT_A.w * 0.5, label: "atk-logic", led: "blue", knobs: [], buttons: 0 });
   // probe wire bundle from analyzer to the DUT
   pcb(pt, "dut", DUT, { label: "DUT  i2c", led: "lit" });
+  probePod(pt, "probe", POD);
+  display(pt, "disp", DISP, { label: "ssd1306" });
   artifact(pt, "capture", SLOT_B, { h: 12, label: "cap.atkdl", led: "green" });
   instrument(pt, "decode", SLOT_C, { h: 26, screen: "i2c  128", screenTone: "lit", screenW: SLOT_C.w - 20, screenH: 24, label: "decode", led: "blue", knobs: [] });
   return pt.done();
@@ -267,7 +352,102 @@ function scenePower() {
   return pt.done();
 }
 
-const LABEL = `A hardware-in-the-loop bench drawn in isometric. An AI agent node on the left links to the HIL harness at the back, which fans out over colour-coded links to the instruments of the selected workbench and to the device under test at the front. Amber is the agent and its commands, blue is an instrument and its readings, green is a passing safety check.`;
+const LABEL = `A hardware-in-the-loop bench drawn in isometric. A laptop running your coding agent on the left links to the HIL harness at the back, which fans out over colour-coded links to the instruments of the selected workbench and to the device under test at the front. Amber is the agent and its commands, blue is an instrument and its readings, green is a passing safety check.`;
+
+const LOOP_LABEL = `The firmware debug loop drawn as an isometric rotary index table. A central HIL harness hub drives five stations arranged on a ring: build, flash, debug, dump and measure. A small device-under-test token orbits the ring and stops at each station in turn, then returns to build to loop again. Amber is the harness drive and the loop, blue is a hardware wire, green is an artifact spooled as evidence.`;
+
+// ---- the standalone debug-loop diagram: a rotary index table --------------
+// Five stations sit on a ring around a central harness hub; a DUT token orbits
+// the ring and bench.js lights each station as the token arrives, so the figure
+// reads build -> flash -> debug -> dump -> measure -> loop on its own.
+
+const TABLE_R = 186;
+const TABLE_H = 16;
+const RING_R = 128;
+const STEP_DEG = [-90, -18, 54, 126, 198];
+const STEP_META = [
+  { id: "build", label: "build", detail: "fw/ compiles on the host, artifact hashed" },
+  { id: "flash", label: "flash", detail: "probe-rs writes and verifies over SWD" },
+  { id: "debug", label: "debug", detail: "halt at main, single-step, watch PC and faults" },
+  { id: "dump", label: "dump", detail: "RTT console and memory image spooled as artifacts" },
+  { id: "measure", label: "measure", detail: "bench procedure fires instruments, gated on the DUT" },
+];
+
+function sceneLoop() {
+  const pt = painter();
+  const rad = (d) => (d * Math.PI) / 180;
+  const ringPt = (deg, r, z) => [r * Math.cos(rad(deg)), r * Math.sin(rad(deg)), z];
+  const circle = (r, z) => {
+    let d = "";
+    for (let i = 0; i <= 96; i++) {
+      const p = at(ringPt((i / 96) * 360, r, z));
+      d += (i ? "L" : "M") + p[0].toFixed(2) + " " + p[1].toFixed(2);
+    }
+    return d + "Z";
+  };
+  // round rotary table as the ground plane
+  pt.put(
+    `<g data-part="table">${S(k.cylinder(0, 0, TABLE_R, -TABLE_H, TABLE_H, P, 72), { tone: "mid" })}${L(circle(TABLE_R - 10, 0.2), { tone: "faint" })}${L(circle(46, 0.2), { tone: "faint" })}</g>`,
+    [0, 120, -TABLE_H],
+    -1e6,
+  );
+  // the loop track the token rides
+  pt.put(
+    `<g aria-hidden="true">${L(circle(RING_R + 8, 0.3), { tone: "faint" })}${L(circle(RING_R - 8, 0.3), { tone: "faint" })}${L(circle(RING_R, 0.35), { tone: "lo" })}</g>`,
+    [0, 60, 0],
+    -0.7,
+  );
+  // radial drives: the hub reaches every station
+  STEP_DEG.forEach((deg, i) => {
+    const [ix, iy] = ringPt(deg, 36, 20);
+    const [ox, oy] = ringPt(deg, RING_R - 22, 12);
+    const [mx, my] = ringPt(deg, (36 + RING_R - 22) / 2, 26);
+    pt.put(
+      `<g data-edge="${i}">${W(at([ix, iy, 20]), at([ox, oy, 12]), { via: [at([mx, my, 26])], tone: "lit", flow: true, ends: "both", size: 1.5 })}</g>`,
+      [mx, my, 20],
+      -0.4,
+    );
+  });
+  // stations around the ring
+  STEP_DEG.forEach((deg, i) => {
+    const [cx, cy] = ringPt(deg, RING_R, 0);
+    const plan = { x: cx - 23, y: cy - 18, w: 46, d: 36, r: 3 };
+    const attrs = ` data-step="${i}" data-label="${STEP_META[i].label}" data-detail="${STEP_META[i].detail}"`;
+    if (i === 1) probePod(pt, STEP_META[i].id, plan, attrs);
+    else if (i === 3) artifact(pt, STEP_META[i].id, plan, { h: 10, label: "rtt+mem", led: "green", attrs });
+    else if (i === 0) instrument(pt, STEP_META[i].id, plan, { h: 22, screen: "make fw", screenW: plan.w - 14, screenH: 14, label: "build", led: "lit", knobs: [], attrs });
+    else if (i === 2) instrument(pt, STEP_META[i].id, plan, { h: 22, screen: "PC 0x2A18", screenTone: "lit", screenW: plan.w - 14, screenH: 14, label: "halt+step", led: "blue", knobs: [], attrs });
+    else instrument(pt, STEP_META[i].id, plan, { h: 22, screen: "3.298 V", screenW: plan.w - 14, screenH: 14, label: "measure", led: "lit", knobs: [], attrs });
+  });
+  // central harness hub
+  pt.put(
+    `<g data-part="hub" data-label="hil harness" data-detail="one harness drives every step of the loop">${S(k.cylinder(0, 0, 32, 0, 22, P, 44), { tone: "mid" })}${FT(k.topMatrix([0, 0], 22.4, P, "x"), "hil", { size: 6, tone: "lit", anchor: "middle" })}</g>`,
+    [0, 0, 22],
+  );
+  // the orbiting DUT token (bench.js translates it around the ring)
+  const [tx, ty] = ringPt(STEP_DEG[0], RING_R, 0);
+  const tplan = { x: tx - 11, y: ty - 8, w: 22, d: 16, r: 2 };
+  const OC = at([0, 0, 0.6]);
+  const OX = at([1, 0, 0.6]);
+  const OY = at([0, 1, 0.6]);
+  const tokenAttrs =
+    ` data-ocx="${OC[0].toFixed(2)}" data-ocy="${OC[1].toFixed(2)}"` +
+    ` data-oax="${(OX[0] - OC[0]).toFixed(4)}" data-oay="${(OX[1] - OC[1]).toFixed(4)}"` +
+    ` data-obx="${(OY[0] - OC[0]).toFixed(4)}" data-oby="${(OY[1] - OC[1]).toFixed(4)}"` +
+    ` data-or="${RING_R}" data-a0="${STEP_DEG[0]}"`;
+  pt.put(
+    `<g class="loop-token"${tokenAttrs}>${S(k.slabOf(tplan, 0.6, 5, P, 2, 0.4), { tone: "hi" })}${D([at([tx, ty, 5.4])], { size: 1.2, tone: "lit", pulse: true })}</g>`,
+    [tx, ty, 4],
+    1,
+  );
+  // numbered labels outside the ring
+  const tags = STEP_DEG.map((deg, i) => {
+    const [lx, ly] = ringPt(deg, RING_R + 34, 0.3);
+    return FT(k.topMatrix([lx, ly], 0.3, P, "x"), `${i + 1} ${STEP_META[i].label}`, { size: 4.6, tone: "mid", anchor: "middle" });
+  }).join("");
+  pt.put(`<g aria-hidden="true">${tags}</g>`, [0, 60, 0], -0.6);
+  return pt.done();
+}
 
 const SCENES = [
   {
@@ -281,8 +461,21 @@ const SCENES = [
       { mark: "blue", label: "an instrument and its readings" },
       { mark: "green", label: "safety policy: pass" },
     ],
+    prompts: [
+      { tool: "hil_exec", text: "Set the Keithley 2400 to source 3.3 V with a 100 mA limit, then ask the Rigol scope whether the rail settles within 10 mV before the DUT powers up. Use hil_exec so the safety policy sees every command." },
+      { tool: "hil_exec, hil_errors", text: "Sweep the EA supply from 0 to 5 V in 100 mV steps, read back at each step, drain the error queue with hil_errors, and plot the linearity error from the returned JSON." },
+    ],
+    session: [
+      ["you", "Set the Keithley 2400 to 3.3 V with a 100 mA limit, then verify the rail on the scope."],
+      ["call", "hil_devices keithley-2400"],
+      ["ok", "profile loaded: SMU, driver scpi, safety policy pass"],
+      ["call", "hil_exec SOUR:VOLT 3.3, CURR:LIM 0.1"],
+      ["ok", "ok, error queue empty"],
+      ["call", "hil_exec MEAS:VOLT? on rigol-dho1072"],
+      ["ok", "3.298 V, within 10 mV: DUT clear to power"],
+    ],
     parts: {
-      agent: { label: "agent", detail: "Python, CLI or MCP -> hil.connect()" },
+      agent: { label: "coding agent", detail: "Claude Code, Codex, Cursor or Qoder over MCP" },
       hub: { label: "hil.instrument", detail: "write, query, safe_execute, capture" },
       smu: { label: "keithley-2400", detail: "SourceMeter (SMU), driver: scpi" },
       scope: { label: "rigol-dho1072", detail: "Oscilloscope, driver: scpi" },
@@ -303,8 +496,21 @@ const SCENES = [
       { mark: "blue", label: "a probe, a target and its wire" },
       { mark: "green", label: "verify + hash recorded" },
     ],
+    prompts: [
+      { tool: "hil_debug", text: "Build the firmware in fw/, flash it to the nRF52840 DK with hil_debug, then halt at main and single-step through init until the status LED blinks. Report the program counter and any hard fault." },
+      { tool: "hil_debug", text: "Once flashing verifies, open an RTT console with hil_debug and watch ten seconds of log for assertions before calling the run good." },
+    ],
+    session: [
+      ["you", "Flash fw/app.elf to the nRF52840 DK, step through init, and watch for faults."],
+      ["call", "hil_debug_probe"],
+      ["ok", "1 probe: J-Link, serial 000687745590"],
+      ["call", "hil_debug flash build/app.elf"],
+      ["ok", "verified, hash 9c41e2 recorded"],
+      ["call", "hil_debug halt, step 4, rtt 10 s"],
+      ["ok", "PC 0x00002A18, no hard fault, log clean"],
+    ],
     parts: {
-      agent: { label: "agent", detail: "build -> flash -> debug pipeline" },
+      agent: { label: "coding agent", detail: "builds, flashes and steps through main" },
       hub: { label: "hil.drivers.debug", detail: "probe-rs, pyOCD, OpenOCD, esptool, stlink" },
       probe: { label: "debug probe", detail: "debug://probe-rs, SWD or JTAG" },
       target: { label: "generic-cortex-m", detail: "nRF52840 target, flash + halt + step" },
@@ -317,19 +523,35 @@ const SCENES = [
   {
     id: "logic",
     name: "Logic analyzer",
-    tag: "capture I2C, SPI or UART, decode to frames, spool the artifact",
+    tag: "flash the driver over SWD, trigger on GPIO, decode I2C to frames",
     hint: "Hover a part to read it",
-    readout: "hil atklogic decode cap.atkdl --decoder i2c  ->  128 frames",
+    readout: "hil atklogic decode cap.atkdl --decoder i2c  ->  128 frames to 0x3c",
     keys: [
-      { mark: "lit", label: "the agent and the decoded frames" },
-      { mark: "blue", label: "analyzer, probe bundle and channels" },
+      { mark: "lit", label: "the agent, the GPIO trigger and live frames" },
+      { mark: "blue", label: "analyzer, probe bundle, SWD ribbon and I2C taps" },
       { mark: "green", label: "capture written to the spool" },
     ],
+    prompts: [
+      { tool: "hil_debug, hil_capture", text: "Flash the SSD1306 display driver to the DUT with hil_debug over SWD, then capture two seconds of SCL, SDA and the GPIO0 trigger at 4 MS/s and decode every frame." },
+      { tool: "hil_capture", text: "Gate the capture on the DUT trigger edge, then check the decoded init sequence against the panel datasheet: address, control bytes, and any frame that NACKs." },
+    ],
+    session: [
+      ["you", "Flash the display driver, capture I2C gated on the GPIO trigger, and validate the init sequence."],
+      ["call", "hil_debug flash build/display-driver.elf"],
+      ["ok", "verified, SWD at 4 MHz"],
+      ["call", "hil_capture logic://usb, ch0 scl, ch1 sda, ch2 trig, 2 s"],
+      ["ok", "8.0 M samples, 14 trigger edges"],
+      ["call", "hil atklogic decode cap.atkdl, decoder i2c"],
+      ["ok", "128 frames to 0x3c, init matches the datasheet"],
+      ["note", "trigger to first SCL edge 412 us, stable across runs"],
+    ],
     parts: {
-      agent: { label: "agent", detail: "logic + decode steps in a procedure" },
+      agent: { label: "coding agent", detail: "reads decoded frames as JSON" },
       hub: { label: "hil.drivers.logic", detail: "in-process, no daemon, no GPL boundary" },
-      la: { label: "alientek-atk-logic", detail: "logic://usb, 4 MS/s on channels 0,1" },
-      dut: { label: "DUT", detail: "I2C bus under test (scl, sda)" },
+      la: { label: "alientek-atk-logic", detail: "logic://usb, 4 MS/s on ch0..ch2, trigger on ch2" },
+      probe: { label: "debug probe", detail: "probe-rs over SWD, flashes the driver" },
+      dut: { label: "DUT", detail: "I2C master, GPIO0 pulses once per frame" },
+      disp: { label: "i2c display", detail: "SSD1306 panel at 0x3c, bus tapped" },
       capture: { label: "cap.atkdl", detail: "CaptureArtifact: path + metadata, not bytes" },
       decode: { label: "decode", detail: "sigrok i2c -> 128 frames" },
       bench: { label: "bench", detail: "captures land in a TTL-managed spool" },
@@ -347,8 +569,22 @@ const SCENES = [
       { mark: "blue", label: "PPK2, the DUT and its digital inputs" },
       { mark: "green", label: "average draw within budget" },
     ],
+    prompts: [
+      { tool: "hil_capture", text: "Build a power bench with the PPK2 as the 3V3 source for the DUT. Stream one hour of current with hil_capture into the spool, then report mean, p95 and total energy in Wh." },
+      { tool: "hil_debug, hil_capture", text: "Design and flash a low-power firmware build, re-run the same one-hour profile, and score it against the baseline capture in mean current and estimated battery days." },
+    ],
+    session: [
+      ["you", "Source 3V3 from the PPK2 and log one hour of current on the real device."],
+      ["call", "hil_setup ppk2"],
+      ["ok", "backend ready, ppk2-api 0.9.2"],
+      ["call", "hil_capture ppk2:// MEAS:CURR? for 3600 s"],
+      ["ok", "NDJSON spool written, 3.6 M samples"],
+      ["call", "hil telemetry summarize"],
+      ["ok", "mean 52.3 mA, p95 81.0 mA, 0.9 Wh"],
+      ["note", "baseline saved, ready to A/B the firmware"],
+    ],
     parts: {
-      agent: { label: "agent", detail: "repeat + capture steps over a soak" },
+      agent: { label: "coding agent", detail: "plans the soak, scores the firmware" },
       hub: { label: "hil.telemetry", detail: "Sample records -> summarize(), energy int(P dt)" },
       ppk2: { label: "nordic-ppk2", detail: "Power Profiler Kit II, driver: ppk2" },
       dut: { label: "DUT", detail: "powered at 3.3 V, current measured" },
@@ -383,9 +619,25 @@ writeFileSync(join(ASSETS, "bench-scenes.js"), `window.__HIL_BENCH=${JSON.string
 
 // inline the default scene into index.html so the figure reads without JS
 const INDEX = join(HERE, "..", "index.html");
+const WHO = { you: "you", call: "hil", ok: "ok", note: "note" };
+const sessionItems = (s) => (s.session || [])
+  .map(([kind, text], i) => `<li class="console-line" data-kind="${kind}" style="--i:${i}"><span class="console-who">${WHO[kind]}</span><p>${text}</p></li>`)
+  .join("");
+const promptItems = (s) => (s.prompts || [])
+  .map((p) => `<li class="prompt-item"><span class="prompt-tool">${p.tool}</span><p>${p.text}</p><button class="copy-btn" type="button" data-copy="${p.text.replace(/"/g, "&quot;")}">copy</button></li>`)
+  .join("");
 if (existsSync(INDEX)) {
   const html = readFileSync(INDEX, "utf8");
-  const next = html.replace(/(<div data-svg-host>)[\s\S]*?(<\/div>)/, (_m, a, b) => a + SCENES[0].svg + b);
+  let next = html.replace(/(<div data-svg-host>)[\s\S]*?(<\/div>)/, (_m, a, b) => a + SCENES[0].svg + b);
+  next = next.replace(/(<ul class="prompt-list" data-prompts-host>)[\s\S]*?(<\/ul>)/, (_m, a, b) => a + promptItems(SCENES[0]) + b);
+  next = next.replace(/(<ol class="console-lines" data-console-host>)[\s\S]*?(<\/ol>)/, (_m, a, b) => a + sessionItems(SCENES[0]) + b);
+  next = next.replace(/(<div data-loop-svg>)[\s\S]*?(<\/div>)/, (_m, a, b) => a + k.figureSvg({
+    width: WIDTH,
+    height: HEIGHT,
+    label: LOOP_LABEL,
+    body: sceneLoop(),
+    className: "loop-svg",
+  }) + b);
   if (next !== html) writeFileSync(INDEX, next);
 }
 

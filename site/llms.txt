@@ -14,6 +14,7 @@
 - Corpus: 725 instruments, 7 vendors, ~294k SCPI commands (Keysight 279, Rigol 211, Keithley 85, Tektronix 84, EA 29, Rohde & Schwarz 22, B&K 15).
 - Eight curated profiles load by default with safety policies: keithley-2400, rigol-dho1072, keysight-ac6801b, ea-el9000b, nordic-ppk2, alientek-atk-logic, generic-cortex-m, esp32-devkit.
 - Drivers: scpi, ppk2 (Nordic Power Profiler Kit II), logic (ALIENTEK ATK-Logic), debug (probe-rs, pyOCD, OpenOCD, esptool, stlink).
+- Debug loop: one agent command builds the firmware, flashes it over the probe (SWD on Cortex-M, UART on ESP32), halts and single-steps, spools RTT and memory dumps as artifacts, then hands the running DUT to an instrument sequence; a failed assertion reopens the build with the capture attached.
 - Addressing: tcp://, serial://, visa://, ppk2://, logic://, debug:// or a registry slug.
 - Safety by default: each profile carries a policy (block / allow / limits); the bench refuses blocked commands.
 - Simulator: dry-run any YAML procedure with `hil bench run <plan>.yaml --sim`; validate statically with `hil bench validate`.
