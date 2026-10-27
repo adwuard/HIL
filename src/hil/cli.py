@@ -453,7 +453,7 @@ def _add_mcp_parser(
     mi = msub.add_parser("install", help="register HIL in agents' global MCP config",
                          parents=[sub_common])
     mi.add_argument("--agent", default="",
-                    help="target one agent (claude-code, codex, cursor, windsurf, cline); "
+                    help="target one agent (claude-code, codex, cursor, qoder, windsurf, cline); "
                          "default: every detected agent")
     mi.add_argument("--dry-run", action="store_true", help="show what would change; write nothing")
     mi.add_argument("--no-path", action="store_true",

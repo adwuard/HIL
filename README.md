@@ -397,15 +397,15 @@ pip install 'hil-harness[mcp]'   # add the MCP SDK (works with mcp 1.x and 2.x)
 
 hil mcp                          # run the server over stdio (what an agent spawns)
 hil mcp install                  # register it globally in every detected agent
-hil mcp install --agent codex    # …or one agent (claude-code, codex, cursor, windsurf, cline)
+hil mcp install --agent codex    # …or one agent (claude-code, codex, cursor, qoder, windsurf, cline)
 hil mcp install --dry-run        # preview the config changes, write nothing
 hil mcp config                   # print the snippet to paste yourself
 ```
 
 `hil mcp install` merges a single `hil` entry into each agent's **user-level** config
-— `~/.claude.json`, `~/.codex/config.toml`, `~/.cursor/mcp.json`, … — so the tools are
-available in *every* project, not just this one. It preserves whatever is already
-there, is idempotent (re-running updates, never duplicates), and bakes your `PATH`
+— `~/.claude.json`, `~/.codex/config.toml`, `~/.cursor/mcp.json`, `~/.qoder-cn/mcp.json`,
+… — so the tools are available in *every* project, not just this one. It preserves
+whatever is already there, is idempotent (re-running updates, never duplicates), and bakes your `PATH`
 into the server env so GUI-launched agents still find `probe-rs`, `openocd`, `esptool`
 and `gdb`. Prefer the official route? Claude Code also accepts:
 

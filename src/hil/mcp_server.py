@@ -37,6 +37,7 @@ import functools
 import json
 import os
 import platform as _platform
+import shutil
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -513,17 +514,29 @@ def run(transport: str = "stdio", host: str = "127.0.0.1", port: int = 8765) -> 
 
 # --- global registration for coding agents ---------------------------------
 def server_command() -> list[str]:
-    """The absolute command an agent should spawn.
+    """The local stdio command an agent should spawn: the ``hil mcp`` console command.
 
-    Uses *this* interpreter + ``-m hil.mcp_server`` so it works regardless of the
-    agent's PATH and always matches the environment that has HIL (and the mcp SDK)
-    installed — the key to being 'accessible globally' from any project.
+    Prefer the ``hil`` executable on PATH, then the one beside the running
+    interpreter (the same environment that has HIL + the mcp SDK), so the entry is
+    an absolute *local command* that works from any project and survives the minimal
+    PATH of GUI-launched agents. Falls back to ``<python> -m hil.mcp_server`` when no
+    console script is present. This is the same local-stdio-command form as
+    ``claude mcp add … -- hil mcp`` and Codex's ``[mcp_servers.hil]``.
     """
+    exe = shutil.which("hil")
+    if not exe:
+        for name in ("hil", "hil.exe"):  # .exe for Windows console script
+            adjacent = Path(sys.executable).with_name(name)
+            if adjacent.exists():
+                exe = str(adjacent)
+                break
+    if exe:
+        return [exe, "mcp"]
     return [sys.executable, "-m", "hil.mcp_server"]
 
 
 def server_entry(*, include_path: bool = True) -> dict:
-    """The ``mcpServers``-style entry (Claude Code, Cursor, Windsurf, VS Code, Cline).
+    """The ``mcpServers``-style entry (Claude Code, Cursor, Qoder, Windsurf, VS Code, Cline).
 
     PATH is captured so GUI-launched agents (which start with a minimal env) can
     still find the external tools HIL shells out to — probe-rs, openocd, esptool,
@@ -550,6 +563,9 @@ def codex_toml(*, include_path: bool = True) -> str:
 def _agent_specs() -> dict[str, dict[str, Any]]:
     """Where each agent keeps its USER-LEVEL (global) MCP config, and its format."""
     h = Path(os.environ.get("HIL_MCP_HOME") or Path.home())
+    # QoderCN keeps its home at ~/.qoder-cn; international Qoder at ~/.qoder.
+    # Prefer whichever exists so `install` targets the running flavour.
+    qoder_home = h / ".qoder-cn" if (h / ".qoder-cn").exists() else h / ".qoder"
     return {
         "claude-code": {
             "path": h / ".claude.json",
@@ -560,6 +576,12 @@ def _agent_specs() -> dict[str, dict[str, Any]]:
         "cursor": {
             "path": h / ".cursor" / "mcp.json",
             "detect": (h / ".cursor",),
+            "format": "json",
+            "key": "mcpServers",
+        },
+        "qoder": {
+            "path": qoder_home / "mcp.json",
+            "detect": (h / ".qoder-cn", h / ".qoder"),
             "format": "json",
             "key": "mcpServers",
         },
@@ -716,7 +738,8 @@ def config_snippet(agent: str = "", include_path: bool = True) -> str:
         return head + "\n" + json.dumps({"mcpServers": {"hil": entry}}, indent=2)
     return (
         "# JSON agents (Claude Code ~/.claude.json, Cursor ~/.cursor/mcp.json,\n"
-        "#              Windsurf, VS Code, Cline) — merge into \"mcpServers\":\n"
+        "#              Qoder ~/.qoder-cn/mcp.json, Windsurf, VS Code, Cline)\n"
+        "#              — merge into \"mcpServers\":\n"
         + json.dumps({"mcpServers": {"hil": entry}}, indent=2)
         + "\n\n# Codex CLI — append to ~/.codex/config.toml:\n"
         + codex_toml(include_path=include_path)

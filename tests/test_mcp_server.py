@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 
 import pytest
 
@@ -21,16 +22,31 @@ from hil import mcp_server as M
 
 
 # --- pure logic: launch command + config snippets --------------------------
-def test_server_command_is_absolute_module_invocation():
+def test_server_command_uses_hil_on_path(monkeypatch):
+    # the idiomatic local stdio command: an absolute `hil` + the `mcp` subcommand
+    monkeypatch.setattr(M.shutil, "which", lambda name: "/fake/bin/hil" if name == "hil" else None)
+    assert M.server_command() == ["/fake/bin/hil", "mcp"]
+
+
+def test_server_command_falls_back_to_adjacent_console_script(monkeypatch):
+    # not on PATH, but a `hil` sits beside the running interpreter -> use it
+    monkeypatch.setattr(M.shutil, "which", lambda name: None)
     cmd = M.server_command()
-    assert cmd[1:] == ["-m", "hil.mcp_server"]
-    assert cmd[0] and "python" in cmd[0].lower()  # the running interpreter, absolute
+    assert cmd[1:] == ["mcp"]
+    assert os.path.isabs(cmd[0]) and os.path.basename(cmd[0]).lower().startswith("hil")
+
+
+def test_server_command_module_fallback(monkeypatch):
+    # no console script anywhere -> <python> -m hil.mcp_server
+    monkeypatch.setattr(M.shutil, "which", lambda name: None)
+    monkeypatch.setattr(M.Path, "exists", lambda self: False)
+    assert M.server_command() == [M.sys.executable, "-m", "hil.mcp_server"]
 
 
 def test_config_snippet_json_agents_use_mcp_servers_key():
     snip = M.config_snippet(agent="cursor", include_path=False)
     assert "mcpServers" in snip and '"hil"' in snip
-    assert "hil.mcp_server" in snip
+    assert M.server_command()[0] in snip  # spawns the local `hil mcp` command
 
 
 def test_config_snippet_codex_uses_toml_block():
@@ -58,7 +74,7 @@ def test_install_merges_json_preserving_other_keys(tmp_path, monkeypatch):
 
     data = json.loads(cfg.read_text())
     assert "keepme" in data["mcpServers"]          # pre-existing server preserved
-    assert data["mcpServers"]["hil"]["args"] == ["-m", "hil.mcp_server"]
+    assert data["mcpServers"]["hil"]["args"] == M.server_command()[1:]
 
 
 def test_install_is_idempotent(tmp_path, monkeypatch):
@@ -117,6 +133,31 @@ def test_detect_agents_respects_sandbox_home(tmp_path, monkeypatch):
     assert M.detect_agents() == []
     (tmp_path / ".codex").mkdir()
     assert M.detect_agents() == ["codex"]
+
+
+def test_install_qoder_prefers_qoder_cn_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HIL_MCP_HOME", str(tmp_path))
+    (tmp_path / ".qoder-cn").mkdir()      # QoderCN flavour
+    (tmp_path / ".qoder").mkdir()         # international flavour also present
+    cfg = tmp_path / ".qoder-cn" / "mcp.json"
+    cfg.write_text(json.dumps({"mcpServers": {"keepme": {"command": "x"}}}))
+
+    assert "qoder" in M.detect_agents()
+    report = M.install(agent="qoder", include_path=False)
+    assert report["targets"][0]["path"] == str(cfg)     # CN home wins
+    data = json.loads(cfg.read_text())
+    assert "keepme" in data["mcpServers"]               # pre-existing server preserved
+    assert data["mcpServers"]["hil"]["args"] == M.server_command()[1:]
+    assert not (tmp_path / ".qoder" / "mcp.json").exists()   # intl left untouched
+
+
+def test_install_qoder_falls_back_to_international_home(tmp_path, monkeypatch):
+    monkeypatch.setenv("HIL_MCP_HOME", str(tmp_path))
+    (tmp_path / ".qoder").mkdir()         # only the international flavour exists
+    report = M.install(agent="qoder", include_path=False)
+    cfg = tmp_path / ".qoder" / "mcp.json"
+    assert report["targets"][0]["path"] == str(cfg)
+    assert json.loads(cfg.read_text())["mcpServers"]["hil"]["args"] == M.server_command()[1:]
 
 
 # --- pure logic: tools that need no hardware -------------------------------
