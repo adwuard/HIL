@@ -20,8 +20,11 @@ So the split is:
 
 Like the ``ppk2`` driver, the backend is a small swappable
 :class:`LogicBackend` protocol: :class:`LogicDaemonBackend` talks to the real
-daemon, :class:`LogicSimBackend` synthesizes captures so bench runs and CI work
-with no hardware, and tests can inject a fake.
+daemon, :class:`~hil.drivers._atklogic.AtkLogicBackend` drives the ATK-Logic
+in-process, :class:`~hil.drivers._sigrok.SigrokBackend` shells out to
+``sigrok-cli`` for GPL libsigrok analyzers (e.g. the Sipeed SLogic Combo 8),
+:class:`LogicSimBackend` synthesizes captures so bench runs and CI work with no
+hardware, and tests can inject a fake.
 
 A curated **pseudo-SCPI facade** lets the analyzer reuse the rest of HIL
 unchanged (registry safety policy, bench procedures, ``--sim`` dry-runs, CLI)::
@@ -56,6 +59,11 @@ _DEFAULT_RATE = 1_000_000.0
 _CAPTURE_ROW_CAP = 512          # rows the compatibility capture() path reads back
 _EDGE_MAP = {"R": "rising", "RISE": "rising", "RISING": "rising",
              "F": "falling", "FALL": "falling", "FALLING": "falling"}
+
+# logic:// host tokens that select the sigrok-cli subprocess backend (GPL
+# libsigrok isolated out-of-process, like OpenOCD in the debug driver). A
+# `driver=` query param also selects it even on logic://usb.
+_SIGROK_HOSTS = ("sigrok", "slogic", "sipeed")
 
 
 # -- backend protocol -------------------------------------------------------
@@ -594,20 +602,32 @@ def logic_driver(addr: Address, device: Device | None, timeout: float) -> LogicI
     """Factory for ``logic://`` addresses (or a device with ``driver: logic``).
 
     ``logic://usb[?serial=..&decoders=..&libusb=..]`` drives an ATK-Logic-Analyzer
-    **in-process** via the vendored MIT core (no daemon). ``logic://host[:port]``
-    drives the JSON-RPC capture daemon.
+    **in-process** via the vendored MIT core (no daemon). ``logic://sigrok``
+    (aliases ``slogic``/``sipeed``, or any host with a ``?driver=`` param) shells
+    out to ``sigrok-cli`` for GPL libsigrok analyzers such as the Sipeed SLogic
+    Combo 8. ``logic://host[:port]`` drives the JSON-RPC capture daemon.
     """
     host = (addr.host or "").lower()
+    params = dict(addr.params or {})
     if not host:
         raise HilError(
-            "logic:// needs a target, e.g. logic://usb (in-process ATK-Logic) or "
+            "logic:// needs a target, e.g. logic://usb (in-process ATK-Logic), "
+            "logic://sigrok (sigrok-cli, e.g. Sipeed SLogic) or "
             "logic://127.0.0.1:5555 (capture daemon; see docs/logic-daemon-protocol.md)"
         )
-    if host in ("usb", "local", "atk"):
+    if host in _SIGROK_HOSTS or (host in ("usb", "local", "atk") and params.get("driver")):
+        from ._sigrok import SigrokBackend
+        backend = SigrokBackend(driver=params.get("driver") or "",
+                                conn=params.get("conn", ""),
+                                serial=params.get("serial", ""),
+                                channels=int(params.get("channels") or 8),
+                                sigrok_bin=params.get("bin") or params.get("sigrok") or "",
+                                timeout=timeout)
+    elif host in ("usb", "local", "atk"):
         from ._atklogic import AtkLogicBackend
-        backend = AtkLogicBackend(serial=addr.params.get("serial"),
-                                  decoders_dir=addr.params.get("decoders"),
-                                  libusb=addr.params.get("libusb"),
+        backend = AtkLogicBackend(serial=params.get("serial"),
+                                  decoders_dir=params.get("decoders"),
+                                  libusb=params.get("libusb"),
                                   timeout=timeout)
     else:
         backend = LogicDaemonBackend(host, addr.port or DEFAULT_LOGIC_PORT, timeout=timeout)

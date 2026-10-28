@@ -1,0 +1,85 @@
+slug: sipeed-slogic-combo8
+manufacturer: Sipeed
+model: SLogic Combo 8
+category: logic-analyzer
+driver: logic                   # non-SCPI: routed to hil.drivers.logic
+default_address: logic://sigrok # -> SigrokBackend (shells out to sigrok-cli)
+description: >
+  Sipeed SLogic Combo 8 — an 8-channel USB2.0 logic analyzer (VID:PID 359f:0300,
+  "SIPEED USB TO LA", <=80 MS/s). Not SCPI. It is driven only by libsigrok
+  (GPL-3.0): Sipeed ships support as the `sipeed-slogic-analyzer` driver on their
+  libsigrok `slogic-dev` fork, with no documented standalone USB protocol. HIL's
+  MIT core never links libsigrok — it shells out to `sigrok-cli` over
+  logic://sigrok, exactly the isolation the debug driver uses for GPL OpenOCD.
+  Captures are file-backed artifacts (.srzip, or csv on request) and protocol
+  decode runs sigrok's Python decoders in the same child process.
+interfaces: [usb]
+connection_examples:
+  - logic://sigrok                          # Sipeed SLogic via sigrok-cli (default driver)
+  - logic://sigrok?conn=359f.0300           # ...selecting one analyzer by VID.PID
+  - logic://sigrok?driver=sipeed-slogic-analyzer&channels=8
+  - logic://slogic                          # alias
+capabilities:
+  - logic-capture
+  - hardware-trigger
+  - protocol-decode
+  - stream-to-disk
+safety:
+  # Informational envelope for the analyzer; keep captures inside it.
+  limits:
+    channels: 1..8
+    sample_rate: 1..80000000 Hz
+commands:
+  - name: set-channels
+    syntax: ':CONF:CHAN <n|list>'
+    description: Enable channels — a count (e.g. 8) or an index list (e.g. 0,1,2,3).
+    subsystem: CONFigure
+    parameters: '<n|list> = channel count or comma/space-separated indices'
+  - name: set-sample-rate
+    syntax: ':CONF:RATE <hz>'
+    description: Set the sample rate in hertz (<=80 MS/s for the Combo 8).
+    parameters: '<hz> sample rate, e.g. 1000000'
+  - name: set-depth
+    syntax: ':CONF:DEPTH <samples>'
+    description: Capture depth in samples (alternative to a duration).
+  - name: set-duration
+    syntax: ':CONF:DUR <seconds>'
+    description: Capture duration in seconds (alternative to a depth).
+  - name: set-format
+    syntax: ':CONF:FORM <fmt>'
+    description: Fetch format for the capture artifact.
+    parameters: '<fmt> = srzip | csv  (srzip is sigrok''s native zipped capture)'
+  - name: set-trigger-channel
+    syntax: ':TRIG:CHAN <n>'
+    description: Trigger on channel n.
+  - name: set-trigger-level
+    syntax: ':TRIG:LEV <0|1>'
+    description: Trigger level (0 or 1).
+  - name: set-trigger-edge
+    syntax: ':TRIG:EDGE <R|F>'
+    description: Trigger edge — R (rising) or F (falling).
+  - name: set-trigger-position
+    syntax: ':TRIG:POS <pct>'
+    description: Trigger position within the buffer, in percent (0..100).
+  - name: arm-capture
+    syntax: ':ACQ:ARM'
+    description: Configure and arm the capture (alias :INIT:ACQ).
+  - name: wait-capture
+    syntax: ':ACQ:WAIT'
+    description: Block until the armed capture completes (trigger + fill).
+  - name: stop-capture
+    syntax: ':ACQ:STOP'
+    description: Abort/stop the current capture (alias :MEAS:STOP).
+  - name: capture-state
+    syntax: ':ACQ:STAT?'
+    query: true
+    description: Current state — idle | armed | capturing | triggered | done | error.
+  - name: fetch-capture
+    syntax: ':FETCh?'
+    query: true
+    description: Fetch the last capture; returns the artifact file path.
+  - name: decode
+    syntax: ':DEC <name>?'
+    query: true
+    description: Run a protocol decoder over the last capture; returns the decoded path.
+    parameters: '<name> = a sigrok decoder, e.g. i2c | spi | uart | 1wire | can'

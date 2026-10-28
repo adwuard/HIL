@@ -1,0 +1,98 @@
+# Provisioning recipe: Sipeed SLogic Combo 8 (sigrok-cli backend, GPL libsigrok).
+#
+# The logic driver's SigrokBackend (hil.drivers._sigrok) shells out to `sigrok-cli`
+# so HIL's MIT core never links GPL libsigrok — the same isolation the debug driver
+# uses for OpenOCD. But a STOCK distro `sigrok-cli` does NOT drive the SLogic: the
+# `sipeed-slogic-analyzer` driver lives only in Sipeed's libsigrok fork
+# (github.com/sipeed/libsigrok, branch `slogic-dev`). So this recipe builds the
+# sigrok stack from that fork. It deliberately carries NO `driver:` field — it is
+# reached by its exact slug (`hil setup sipeed-slogic-combo8`) so that
+# recipe_for(driver="logic") keeps resolving to the license-clean alientek-atk-logic.
+#
+#   hil setup sipeed-slogic-combo8 --dry-run   # print the plan (build deps + fork build)
+#   hil setup sipeed-slogic-combo8 --yes       # install deps (privileged) + build the stack
+slug: sipeed-slogic-combo8
+description: >
+  Sipeed SLogic Combo 8 (USB 359f:0300, 8 channels, <=80 MS/s) via sigrok-cli.
+  Builds libsigrok from Sipeed's `slogic-dev` fork (the `sipeed-slogic-analyzer`
+  driver), plus libsigrokdecode (protocol decode) and the sigrok-cli frontend.
+  GPL-3.0-or-later, so it stays out-of-process; the MIT core only launches it.
+license: GPL-3.0-or-later
+homepage: https://github.com/sipeed/libsigrok/tree/slogic-dev
+
+# Satisfied only when sigrok-cli actually exposes the Sipeed driver — a stock
+# sigrok-cli (present but driver-less) must NOT short-circuit the build below.
+detect:
+  - command:
+      shell: "sigrok-cli --list-supported 2>/dev/null | grep -q sipeed-slogic-analyzer"
+      expect_rc: 0
+      describe: "sigrok-cli exposes the sipeed-slogic-analyzer driver"
+
+steps:
+  - id: build-deps
+    name: Install the sigrok build dependencies (autotools, glib, libusb, libzip)
+    privileged: true          # system packages -> gated behind --yes
+    optional: true            # skip cleanly if the user manages deps themselves
+    system:
+      macos:
+        brew: [autoconf, automake, libtool, pkg-config, glib, libusb, libzip,
+               python, swig, doxygen, gettext]
+      linux:
+        apt-get: [build-essential, autoconf, automake, libtool, pkg-config,
+                  libglib2.0-dev, libusb-1.0-0-dev, libzip-dev, python3-dev,
+                  swig, doxygen, wget, file, git]
+        dnf: [gcc, gcc-c++, autoconf, automake, libtool, pkgconfig, glib2-devel,
+              libusb1-devel, libzip-devel, python3-devel, swig, doxygen, wget,
+              file, git]
+        pacman: [base-devel, autoconf, automake, libtool, pkgconf, glib2, libusb,
+                 libzip, python, swig, doxygen, wget, file, git]
+
+  - id: clone-libsigrok-fork
+    name: Clone Sipeed's libsigrok fork (branch slogic-dev)
+    optional: true            # warn (not abort) if offline; the build step reports it
+    needs: [git]
+    git:
+      repo: https://github.com/sipeed/libsigrok.git
+      dest: libsigrok
+      rev: slogic-dev
+      depth: 1
+
+  - id: build-sigrok-stack
+    name: Build libsigrok (Sipeed fork) + libsigrokdecode + sigrok-cli
+    heavy: true               # a multi-minute autotools build -> never implicit in auto mode
+    optional: true            # warn (not abort) if a dep or the build is unavailable
+    needs: [git, make]
+    shell:
+      default: >
+        set -e;
+        PREFIX="${HIL_SIGROK_PREFIX:-/usr/local}";
+        echo "Building the sigrok stack into $PREFIX (override with HIL_SIGROK_PREFIX)";
+        test -d libsigrok || git clone --depth 1 -b slogic-dev https://github.com/sipeed/libsigrok.git libsigrok;
+        ( cd libsigrok && ./autogen.sh && ./configure --prefix="$PREFIX" --disable-java --disable-python && make -j4 && make install );
+        test -d libsigrokdecode || git clone --depth 1 https://github.com/sigrokproject/libsigrokdecode.git libsigrokdecode;
+        ( cd libsigrokdecode && ./autogen.sh && ./configure --prefix="$PREFIX" && make -j4 && make install );
+        test -d sigrok-cli || git clone --depth 1 https://github.com/sigrokproject/sigrok-cli.git sigrok-cli;
+        ( cd sigrok-cli && ./autogen.sh && ./configure --prefix="$PREFIX" && make -j4 && make install );
+        echo "Built. Confirm the driver with: sigrok-cli --list-supported | grep sipeed-slogic-analyzer"
+
+verify:
+  - command:
+      shell: "sigrok-cli --list-supported 2>/dev/null | grep -q sipeed-slogic-analyzer"
+      expect_rc: 0
+      describe: "sigrok-cli exposes the sipeed-slogic-analyzer driver"
+
+notes: >
+  Connect with `hil connect logic://sigrok` (or the alias `logic://slogic`, or a
+  device slug `hil connect sipeed-slogic-combo8`). Select one analyzer with
+  `logic://sigrok?conn=359f.0300`. A stock distro sigrok-cli will NOT see the
+  SLogic — the driver only exists in Sipeed's libsigrok `slogic-dev` fork, so the
+  build above is required (or use Sipeed's own prebuilt PulseView, or sigrok-util's
+  cross-build scripts pointed at the fork — see the SLogic wiki). If `make install`
+  into /usr/local needs root, set HIL_SIGROK_PREFIX to a writable prefix (and add
+  it to PATH / PKG_CONFIG_PATH) or re-run the build under sudo yourself. On Linux,
+  non-root USB access needs a udev rule for 359f:0300 (e.g.
+  /etc/udev/rules.d/60-slogic.rules: SUBSYSTEM=="usb", ATTRS{idVendor}=="359f",
+  ATTRS{idProduct}=="0300", MODE="0666", then `sudo udevadm control --reload &&
+  sudo udevadm trigger`). Protocol decode (`-P i2c:scl=D6:sda=D7`; the SLogic
+  names its channels D0..D7 and sigrok-cli rejects bare indices there) needs
+  libsigrokdecode, which the build step installs alongside sigrok-cli.

@@ -8,6 +8,8 @@ Supported address forms:
     ppk2://PORT                       Nordic Power Profiler Kit II (non-SCPI driver)
     logic://host[:port]               logic-analyzer capture daemon (default port 5555)
     logic://usb[?serial=..&decoders=..&libusb=..]   in-process ATK-Logic backend (no daemon)
+    logic://sigrok[?driver=..&conn=..&channels=..]  sigrok-cli backend for GPL libsigrok
+                                      analyzers (e.g. the Sipeed SLogic Combo 8)
     debug://BACKEND[?target=..&probe=..&transport=swd]   on-chip debugger (flash/SWD/JTAG)
     GPIB::24::INSTR                   bare VISA resource (auto-detected by '::')
 
@@ -52,7 +54,7 @@ class Address:
         if self.scheme == "tcp":
             return f"tcp://{self.host}:{self.port}"
         if self.scheme == "logic":
-            if self.host in ("usb", "local", "atk"):
+            if self.host in ("usb", "local", "atk", "sigrok", "slogic", "sipeed"):
                 qs = "&".join(f"{k}={v}" for k, v in self.params.items())
                 return f"logic://{self.host}" + (f"?{qs}" if qs else "")
             return f"logic://{self.host}:{self.port}"
@@ -105,7 +107,8 @@ def parse_address(raw: str) -> Address:
 
     if scheme == "logic":
         # logic://host[:port]  — JSON-RPC capture daemon, OR
-        # logic://usb[?serial=..&decoders=..&libusb=..] — in-process ATK-Logic backend.
+        # logic://usb[?serial=..&decoders=..&libusb=..] — in-process ATK-Logic backend, OR
+        # logic://sigrok[?driver=..&conn=..&channels=..] — sigrok-cli backend (GPL analyzers).
         parts = urlsplit(f"//{rest}", scheme="logic")
         host = parts.hostname or ""
         if not host:

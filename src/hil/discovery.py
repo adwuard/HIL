@@ -25,7 +25,7 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-DEFAULT_INTERFACES = ("usb", "serial", "lan", "debug")
+DEFAULT_INTERFACES = ("usb", "serial", "lan", "debug", "logic")
 
 
 def _backend_hint(backend: str) -> str:
@@ -40,7 +40,10 @@ def _backend_hint(backend: str) -> str:
 
 def _backend_flags() -> dict[str, bool]:
     """Which discovery backends are importable right now."""
-    flags = {"visa": False, "serial": False, "zeroconf": False, "debug": False}
+    import shutil
+
+    flags = {"visa": False, "serial": False, "zeroconf": False, "debug": False,
+             "sigrok": False}
     try:
         import pyvisa  # noqa: F401
 
@@ -62,6 +65,10 @@ def _backend_flags() -> dict[str, bool]:
     # The debug driver is always importable; whether a probe backend (probe-rs…)
     # is installed is discovered at call time.
     flags["debug"] = True
+    # sigrok-cli (GPL libsigrok, shelled out by the logic driver) enumerates USB
+    # logic analyzers such as the Sipeed SLogic Combo 8 — flagged only when the
+    # binary is on PATH, so a default scan stays silent (and free) without it.
+    flags["sigrok"] = shutil.which("sigrok-cli") is not None
     return flags
 
 
@@ -141,6 +148,21 @@ def _debug_probes() -> list[dict]:
                 pass
         return [p for p in probes if isinstance(p, dict)] or []
     except Exception:  # noqa: BLE001 - no probe backend, or none attached
+        return []
+
+
+def _logic_analyzers(timeout: float) -> list[dict]:
+    """List USB logic analyzers via ``sigrok-cli --scan`` (best-effort).
+
+    Covers the GPL libsigrok devices HIL drives out-of-process through the logic
+    driver's SigrokBackend — e.g. the Sipeed SLogic Combo 8. Returns ``[]`` when
+    sigrok-cli is absent, the scan times out, or no analyzer is attached.
+    """
+    try:
+        from .drivers._sigrok import scan_devices
+
+        return scan_devices(timeout=max(timeout, 6.0))
+    except Exception:  # noqa: BLE001 - no sigrok-cli, or no analyzer attached
         return []
 
 
@@ -248,7 +270,8 @@ def discover(
     """Enumerate the live bench across the requested interfaces.
 
     ``interfaces`` is any subset of ``usb`` (VISA/USB-TMC/GPIB), ``serial``
-    (RS-232 ports), ``lan`` (mDNS LXI/VXI-11) and ``debug`` (on-chip probes).
+    (RS-232 ports), ``lan`` (mDNS LXI/VXI-11), ``debug`` (on-chip probes) and
+    ``logic`` (sigrok USB logic analyzers, e.g. the Sipeed SLogic Combo 8).
     ``identify`` performs a short ``*IDN?`` round-trip per candidate and matches
     it to the reference corpus. Returns ``{ok, devices, warnings, backends}``.
     """
@@ -361,6 +384,32 @@ def discover(
                     "probe": probe,
                 }
             )
+
+    # -- logic analyzers (sigrok / GPL libsigrok) ---------------------------
+    # Silent when sigrok-cli is absent (like `debug` when no probe backend is
+    # installed), so a default discover never pays for a scan it cannot do.
+    if "logic" in want and flags.get("sigrok"):
+        _emit("scanning for sigrok logic analyzers…")
+        for la in _logic_analyzers(timeout):
+            conn = (la.get("conn") or "").strip()
+            driver = (la.get("driver") or "").strip()
+            rec = {
+                "address": "logic://sigrok" + (f"?conn={conn}" if conn else ""),
+                "transport": "usb-logic",
+                "backend": "sigrok",
+                "resource": conn or driver,
+                "interface": "logic",
+                "driver": driver,
+                "model": la.get("model", ""),
+                "channels": la.get("channels", 0),
+            }
+            if la.get("serial"):
+                rec["serial"] = la["serial"]
+            if driver == "sipeed-slogic-analyzer":
+                # the driver name is device-specific -> a confident registry match
+                rec["matched_slug"] = "sipeed-slogic-combo8"
+                rec["matched_name"] = "Sipeed SLogic Combo 8"
+            devices.append(rec)
 
     return {
         "ok": True,
