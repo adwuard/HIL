@@ -261,11 +261,16 @@ def test_probe_rs_command_builders():
     # HIL forwards transport=swd (probe-rs defaults an ST-Link/CMSIS-DAP to JTAG,
     # which fails the nRF52 DP IDCODE read).
     assert be._command("flash", firmware="app.hex") == \
-        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd", "app.hex"]
+        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd",
+         "--verify", "--binary-format", "hex", "app.hex"]
     assert be._command("erase") == \
         ["probe-rs", "erase", "--chip", "nrf52840", "--protocol", "swd"]
     assert be._command("reset") == \
         ["probe-rs", "reset", "--chip", "nrf52840", "--protocol", "swd"]
+    # chip_id maps to the non-destructive `info` (reads DP/AP IDCODE without
+    # halting/resetting), NOT `reset` — so target_info validates real silicon.
+    assert be._command("chip_id") == \
+        ["probe-rs", "info", "--chip", "nrf52840", "--protocol", "swd"]
     assert be._command("rtt") == \
         ["probe-rs", "attach", "--chip", "nrf52840", "--protocol", "swd"]
     assert be._command("read_mem", addr="0x20000000") is None   # not supported
@@ -281,7 +286,36 @@ def test_probe_rs_command_forwards_transport_and_speed():
 def test_probe_rs_command_includes_probe_serial():
     be = ToolBackend("probe-rs", chip="nrf52840", probe="0001")
     assert be._command("flash", firmware="app.hex") == \
-        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd", "--probe", "0001", "app.hex"]
+        ["probe-rs", "download", "--chip", "nrf52840", "--protocol", "swd",
+         "--probe", "0001", "--verify", "--binary-format", "hex", "app.hex"]
+
+
+def test_probe_rs_flash_forwards_format_verify_and_erase():
+    # probe-rs auto-detects only ELF, so HIL must forward --binary-format for a
+    # stock .uf2/.hex/.bin (no hand-conversion) and --verify so the artifact's
+    # `verified` claim is real. --chip-erase honours erase=True; --base-address
+    # is only meaningful for a raw bin.
+    be = ToolBackend("probe-rs", chip="RP2040")
+    pre = ["probe-rs", "download", "--chip", "RP2040", "--protocol", "swd"]
+    assert be._command("flash", firmware="fw.uf2") == \
+        pre + ["--verify", "--binary-format", "uf2", "fw.uf2"]
+    assert be._command("flash", firmware="fw.elf", verify=False, erase=True) == \
+        pre + ["--chip-erase", "--binary-format", "elf", "fw.elf"]
+    assert be._command("flash", firmware="fw.bin", address=0x10000000) == \
+        pre + ["--verify", "--binary-format", "bin",
+               "--base-address", "0x10000000", "fw.bin"]
+    # An explicit format= overrides the extension guess (e.g. an odd filename).
+    assert be._command("flash", firmware="image.img", format="uf2") == \
+        pre + ["--verify", "--binary-format", "uf2", "image.img"]
+
+
+def test_tool_backend_flash_rejects_missing_firmware(tmp_path):
+    # A relative/absent image is caught at the HIL layer with the absolute path
+    # and CWD in the message, instead of probe-rs's cryptic "os error 2" that
+    # reads like a wiring fault (MCP server CWD != the user's project).
+    be = ToolBackend("probe-rs", chip="nrf52840")
+    with pytest.raises(HilError, match="firmware image not found"):
+        be.flash(str(tmp_path / "nope.elf"))
 
 
 def test_openocd_command_builders():

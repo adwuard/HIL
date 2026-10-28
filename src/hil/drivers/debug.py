@@ -126,6 +126,43 @@ def _parse_hex_words(text: str) -> list[int]:
     return words
 
 
+# probe-rs `download --binary-format` values, keyed by firmware file extension.
+# probe-rs auto-detects only ELF; a UF2/HEX/raw-bin image must be told its format
+# explicitly or `download` fails with "Could not read file magic". Guessing from
+# the extension lets HIL flash a stock .uf2 (e.g. MicroPython/RP2040) directly,
+# instead of forcing a caller to hand-convert it to ELF/HEX first.
+_FORMAT_BY_EXT = {
+    ".elf": "elf", ".axf": "elf",
+    ".hex": "hex", ".ihex": "hex", ".ihx": "hex",
+    ".uf2": "uf2",
+    ".bin": "bin",
+}
+
+
+def _guess_binary_format(firmware: Any) -> str:
+    """Map a firmware filename's extension to a probe-rs ``--binary-format`` value."""
+    return _FORMAT_BY_EXT.get(Path(str(firmware)).suffix.lower(), "")
+
+
+def _require_file(path: Any, what: str) -> str:
+    """Expand ``~`` and resolve a relative *input* path against THIS process CWD.
+
+    Raises an actionable :class:`HilError` naming the absolute path tried and the
+    CWD when the file is missing. Under the MCP server the CWD differs from the
+    user's project, so a relative firmware/script path otherwise fails deep inside
+    the tool with a cryptic "os error 2" that reads like a wiring fault.
+    """
+    p = Path(str(path)).expanduser()
+    if not p.is_absolute():
+        p = Path.cwd() / p
+    if not p.is_file():
+        raise HilError(
+            f"debug driver: {what} not found: {p} (cwd={Path.cwd()}). "
+            "Pass an absolute path."
+        )
+    return str(p)
+
+
 _PROBE_NOISE = re.compile(
     r"no debug probes|no probes|following (?:debug )?probes|probes? (?:were|was) "
     r"found|^info\b|^warning\b|^error\b", re.IGNORECASE)
@@ -463,10 +500,32 @@ class ToolBackend:
             if action == "probe_list":
                 return [b, "list"]
             if action == "flash":
-                return [b, "download", *common, str(kw.get("firmware"))]
+                # Forward the flags probe-rs does NOT default: --verify (so the
+                # flash artifact's `verified` claim is real, not assumed),
+                # --binary-format (probe-rs auto-detects only ELF; a .uf2/.hex/
+                # .bin must be told or `download` fails on the file magic),
+                # --chip-erase for erase=True, and --base-address (only meaningful
+                # for a raw bin). This lets a stock UF2 flash without conversion.
+                argv = [b, "download", *common]
+                if kw.get("verify", True):
+                    argv.append("--verify")
+                if kw.get("erase"):
+                    argv.append("--chip-erase")
+                fmt = kw.get("format") or _guess_binary_format(kw.get("firmware"))
+                if fmt:
+                    argv += ["--binary-format", fmt]
+                addr = kw.get("address")
+                if addr is not None and fmt == "bin":
+                    argv += ["--base-address", _hex(addr)]
+                return [*argv, str(kw.get("firmware"))]
             if action == "erase":
                 return [b, "erase", *common]
-            if action in ("reset", "chip_id"):
+            if action == "chip_id":
+                # `probe-rs info` reads the DP/AP IDCODEs without halting or
+                # resetting, so target_info validates real silicon instead of
+                # reporting "reachable" off a destructive `reset` return code.
+                return [b, "info", *common]
+            if action == "reset":
                 return [b, "reset", *common]
             if action in ("rtt", "attach"):
                 return [b, "attach", *common]
@@ -666,6 +725,7 @@ class ToolBackend:
 
     def flash(self, firmware: str, *, chip: str = "", address: int | None = None,
               verify: bool = True, erase: bool = False) -> dict:
+        firmware = _require_file(firmware, "firmware image")
         fp = fingerprint_firmware(firmware, tool=self.tool)
         t0 = time.monotonic()
         res = self._run_ok("flash", firmware=firmware, chip=chip or self.chip,
@@ -696,6 +756,7 @@ class ToolBackend:
         return self._gdb_bin
 
     def gdb(self, script: str, *, gdb_bin: str = "") -> dict:
+        script = _require_file(script, "gdb script")
         gb = gdb_bin or self._resolve_gdb()
         if not gb:
             raise HilError(
